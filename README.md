@@ -71,3 +71,15 @@ gh release list --repo jqran/triton-ascend-wheels | grep '\[stable\]' | head -1
 ```bash
 gh release download <tag> --repo jqran/triton-ascend-wheels --pattern '*.whl'
 ```
+
+## 构建脚本
+
+本仓库的包由 `ci/` 里的脚本自动产出，可直接复用：
+
+| 文件 | 作用 |
+|---|---|
+| `ci/daily_build.sh` | 每日构建主脚本：同步两个仓库 → 容器内构建 AscendNPU-IR（bishengir + hivmc + 9 个模板库 `.bc`）→ 经 `TRITON_ASCEND_BISHENGIR_PATH` 打进 TA wheel（二合一）→ 打包 → 发布。支持 `dev` / `stable` / `all` 两条产品线 |
+| `ci/publish_release.sh` | 把产物目录里的 wheel 发到 release（说明由 BUILD_INFO 自动生成），幂等：release 已存在则更新说明、asset 已存在则跳过 |
+| `ci/README.md` | 使用说明：目录布局、环境变量、已知坑（换 CANN 需删 CMakeCache、构建目录不能搬家、asset 名需 URL 编码等） |
+
+依赖：Linux + docker（Ubuntu 20.04 容器）+ git + python3 + curl；路径都通过 `${HOME}` / 环境变量推导，不绑定具体机器。
