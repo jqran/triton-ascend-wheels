@@ -59,6 +59,7 @@ STUBBED=$(get '空 TU 顶替的模板源文件'); [ "$STUBBED" = "无" ] && STUB
 MISSING_BC=$(get '模板库缺失');        [ "$MISSING_BC" = "无" ] && MISSING_BC=""
 CANN=$(get cann)
 CONTAINER=$(get 容器 | sed 's/  *log=.*//')     # 去掉日志路径，只留容器与 glibc
+BC_CNT=$(get 模板库条目)                        # 形如 "13 个 .bc"（旧 BUILD_INFO 无此字段时留空）
 
 # ---------- 生成 release 说明 ----------
 BODY=$(mktemp)
@@ -89,7 +90,7 @@ BODY=$(mktemp)
   echo
   echo '```'
   echo "bin/{bishengir-compile, bishengir-opt, hivmc, hivmc-a5}"
-  echo "lib/{host.bc, meta_op.{aic,aiv,mix}.{c220,c310}.bc}   # 共 9 个"
+  echo "lib/{host.bc, meta_op.{aic,aiv,mix}.{c220,c310}.bc}   # ${BC_CNT:-共 9 个}"
   echo '```'
   echo
   echo "版本：$(sed -n '/^--- bishengir 版本 ---/,/^--- 产物 md5 ---/p' "$INFO" | sed -n '2p')"
