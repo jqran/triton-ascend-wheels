@@ -133,7 +133,15 @@ update_submodules() {
   log "[$name] 更新 submodule"
   git -C "$repo" submodule sync --recursive >>"$LOG" 2>&1
   if has_submodule "$repo" "third-party/llvm-project" && [ -e "$LLVM_SEED/.git" ]; then
-    git -C "$LLVM_SEED" fetch --all --prune >>"$LOG" 2>&1 || log "[$name] ⚠️ llvm 种子 fetch 失败（继续）"
+    # 只有种子缺 pin 时才刷新种子：pin 不变 → 零网络开销；pin 变了 → 种子吸收一次增量（几百 MB），
+    # 两条产品线共用（本地硬链接），避免各自去 gitcode 重复拉
+    PIN=$(git -C "$repo" ls-tree HEAD third-party/llvm-project 2>/dev/null | awk '{print $3}')
+    if [ -n "$PIN" ] && git -C "$LLVM_SEED" cat-file -e "${PIN}^{commit}" 2>/dev/null; then
+      log "[$name] llvm 种子已含 pin ${PIN:0:12} → 跳过种子 fetch（省流量）"
+    else
+      log "[$name] llvm 种子缺 pin ${PIN:0:12} → 刷新种子（fetch --all，可能几百 MB）"
+      git -C "$LLVM_SEED" fetch --all --prune >>"$LOG" 2>&1 || log "[$name] ⚠️ llvm 种子 fetch 失败（继续）"
+    fi
     git -C "$repo" config submodule.third-party/llvm-project.url "$LLVM_SEED" >>"$LOG" 2>&1
     if git -C "$repo" -c protocol.file.allow=always submodule update --init third-party/llvm-project >>"$LOG" 2>&1; then
       log "[$name] llvm-project ← 本地种子 ✅"
@@ -259,7 +267,11 @@ if [ $NPUIR_OK -eq 1 ]; then
   mkdir -p "$PAYLOAD/bin" "$PAYLOAD/lib"
   cp -f "$NP_BUILD/bin/bishengir-compile" "$NP_BUILD/bin/bishengir-opt" "$NP_BUILD/bin/hivmc" "$PAYLOAD/bin/"
   cp -f "$PAYLOAD/bin/hivmc" "$PAYLOAD/bin/hivmc-a5"   # a5 侧两个名字都在，兼容不同查找逻辑
-  cp -f "$NP_BUILD"/lib/*.bc "$PAYLOAD/lib/"
+  # 只收最终产物：排除 *.bc.linked.bc（llvm-link 的中间文件，正常构建会自己删，异常时会残留在 lib/ 下）
+  for f in "$NP_BUILD"/lib/*.bc; do
+    case "$(basename "$f")" in *.linked.bc) continue;; esac
+    cp -f "$f" "$PAYLOAD/lib/" 2>/dev/null
+  done
   chmod 755 "$PAYLOAD"/bin/*
   EXPECT_BC="host.bc meta_op.aic.c220.bc meta_op.aic.c310.bc meta_op.aiv.c220.bc meta_op.aiv.c310.bc meta_op.mix.aic.c220.bc meta_op.mix.aic.c310.bc meta_op.mix.aiv.c220.bc meta_op.mix.aiv.c310.bc"
   for b in $EXPECT_BC; do [ -f "$PAYLOAD/lib/$b" ] || MISSING_BC="$MISSING_BC $b"; done
@@ -322,6 +334,7 @@ PY
     echo "NPUIR 构建: build.sh 退出码=${NP_BUILD_RC:-?}$([ "${NP_BUILD_RC:-1}" -ne 0 ] && [ $NPUIR_OK -eq 1 ] && echo '（已用 ninja -k 0 + 空 TU 顶替回退）')"
     echo "空 TU 顶替的模板源文件: $([ -s "$STATE/stubbed_srcs.txt" ] && tr '\n' ' ' < "$STATE/stubbed_srcs.txt" || echo 无)"
     echo "模板库缺失: ${MISSING_BC:-无}"
+    echo "模板库条目: $(ls "$PAYLOAD/lib"/*.bc 2>/dev/null | wc -l) 个 .bc"
     echo "产物新鲜度: ${STALE_WARN:-全新（ninja 无待办）}"
     echo "payload: $([ $NPUIR_OK -eq 1 ] && echo "bishengir-payload-npuir${NP8}.tar.gz ($(du -sh "$PAYLOAD" | cut -f1))" || echo "无")"
     echo "容器: $CONTAINER (Ubuntu 20.04/glibc 2.31)  jobs=$JOBS  log=$LOG"
