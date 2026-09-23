@@ -48,3 +48,26 @@ PY
 
 - 这些包由个人 CI 自动产出，**非官方发布**；正式版本请用 PyPI / 华为云镜像上的 triton-ascend。
 - 产物内含 AscendNPU-IR 编译出的工具链二进制，仅供内部验证使用。
+
+## 两条产品线与历史包
+
+仓库每天（01:00）自动构建**两条线**，release 标题以 `[dev]` / `[stable]` 开头：
+
+| 线 | 源码 | tag 形如 |
+|---|---|---|
+| dev | triton-ascend `main-dev` + AscendNPU-IR `master` | `20260923-ta7b4ee867-npuir15a14c58-dev` |
+| stable | triton-ascend `main` + AscendNPU-IR `stable` | `20260923-tad1c8b179-npuir85271f87-stable` |
+
+**历史 release 全部保留**（不自动清理），便于回滚到早先的构建。找各线最新包：
+
+```bash
+# 需要 gh（或直接用网页筛选 tag 前缀）
+gh release list --repo jqran/triton-ascend-wheels | grep '\[dev\]'    | head -1
+gh release list --repo jqran/triton-ascend-wheels | grep '\[stable\]' | head -1
+```
+
+下载指定 tag 的 wheel：
+
+```bash
+gh release download <tag> --repo jqran/triton-ascend-wheels --pattern '*.whl'
+```
