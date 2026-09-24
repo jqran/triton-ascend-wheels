@@ -59,6 +59,7 @@ mark_health() {   # $1=overall(OK|PARTIAL|FAIL|SKIPPED)  $2=detail  $3=clear(boo
 # all：串行跑两个变体（互不干扰，各自加锁）；两条线都建完后**一次性**发布成同一条 release
 if [ "$VARIANT" = "all" ]; then
   rc=0
+  START_TS=$(date +%s)     # 用于判断某变体"本次是否真的跑过"（状态文件是否在本次之后被写过）
   PUBLISH_DEFER=1          # 子进程只构建不发布，否则会变成两条 release（旧口径）
   export PUBLISH_DEFER
   for v in dev stable; do
@@ -99,10 +100,15 @@ if [ "$VARIANT" = "all" ]; then
     fi
   fi
   # ---- 失败看板：汇总两条线 + 发布结果 → state/health.txt + state/ATTENTION（登录即可见）----
-  OV=OK; DET=""; NSKIP=0
+  OV=OK; DET=""; NSKIP=0; NRAN=0; NOCLEAR=0
   for pair in "dev:$W/state/last_run.txt" "stable:$W/stable/state/last_run.txt"; do
     n=${pair%%:*}; st=${pair#*:}
-    if [ ! -f "$st" ]; then OV=FAIL; DET="$DET $n=无记录"; continue; fi
+    if [ ! -f "$st" ]; then OV=FAIL; DET="$DET $n=无记录"; NOCLEAR=1; continue; fi
+    # 状态文件不是本次写的 → 该变体本轮没跑（典型：另一实例持锁，本轮让位）→ 不算成功、也不清提示
+    if [ "$(stat -c %Y "$st" 2>/dev/null || echo 0)" -lt $((START_TS-2)) ]; then
+      DET="$DET $n=本次未运行(锁占用?)"; NOCLEAR=1; continue
+    fi
+    NRAN=$((NRAN+1))
     s=$(printf '%s' "$(tail -1 "$st")" | sed -n 's/.* status=\([^ ]*\).*/\1/p')
     case "$s" in
       OK) ;;
@@ -117,15 +123,22 @@ if [ "$VARIANT" = "all" ]; then
   esac
   # 子变体退出码非 0 但状态文件没反映（例如被 kill / 崩溃，来不及写 last_run.txt）→ 也算失败
   if [ "$rc" -ne 0 ] && [ "$OV" = OK ]; then OV=FAIL; DET="$DET 子变体退出码=$rc（状态文件可能没更新）"; fi
+  [ "$NRAN" -eq 0 ] && OV=SKIPPED_LOCK          # 一条都没真跑 → 单独一个 overall，不动提示
   [ -n "$DET" ] || DET="两条线都正常"
-  CLEAR=0; [ "$OV" = OK ] && [ "$NSKIP" -eq 0 ] && CLEAR=1   # 都真跑成功才清提示（跳过不清，避免掩盖旧问题）
+  CLEAR=0
+  [ "$OV" = OK ] && [ "$NSKIP" -eq 0 ] && [ "$NOCLEAR" -eq 0 ] && CLEAR=1   # 都真跑成功才清提示
   mark_health "$OV" "$DET" "$CLEAR"
-  if [ "$OV" = OK ]; then
-    echo "[$(date '+%F %T')] ========== 失败看板 overall=OK（$DET）$([ $CLEAR = 1 ] && echo '，已清除登录提示') =========="
-    exit $rc
-  fi
-  echo "[$(date '+%F %T')] ========== 失败看板 overall=$OV（$DET）→ 登录时会看到提示（消除：$W/ack_last_failure.sh） =========="
-  exit 1
+  case "$OV" in
+    OK)
+      echo "[$(date '+%F %T')] ========== 失败看板 overall=OK（$DET）$([ $CLEAR = 1 ] && echo '，已清除登录提示') =========="
+      exit $rc ;;
+    SKIPPED_LOCK)
+      echo "[$(date '+%F %T')] ========== 失败看板 overall=SKIPPED_LOCK（$DET）→ 本轮让位给另一实例，登录提示不变 =========="
+      exit 0 ;;
+    *)
+      echo "[$(date '+%F %T')] ========== 失败看板 overall=$OV（$DET）→ 登录时会看到提示（消除：$W/ack_last_failure.sh） =========="
+      exit 1 ;;
+  esac
 fi
 
 case "$VARIANT" in
@@ -155,7 +168,7 @@ CANN_BISHENG=${CANN_BISHENG:-$CANN_ROOT/tools/bisheng_compiler/bin}
 LLVM_SEED=${LLVM_SEED:-$HOME/workspace/AscendNPU-IR/third-party/llvm-project}
 PY311=${PY311:-$HOME/miniconda3/envs/py311/bin}
 
-STAMP=$(date +%Y%m%d)
+STAMP=${STAMP:-$(date +%Y%m%d)}   # 可用环境变量覆盖：演练/补跑时用 STAMP=20260924test，避免踩当天已发布的产物目录
 LOG=$LOGDIR/daily_${VARIANT}_$STAMP.log
 OUTDIR=""
 mkdir -p "$LOGDIR" "$OUT" "$STATE" "$ROOT/src" "$ROOT/build"
