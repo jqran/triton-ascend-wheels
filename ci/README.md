@@ -57,6 +57,8 @@
   或**子进程退出码非 0 但状态文件没更新**（被 kill/崩溃）→ 置 `ATTENTION`；
   只有「`all` 跑完且两条线都 `OK`（不是 `SKIPPED_UNCHANGED`）」或手动 ack 才清除
   （跳过不清，避免长期失败被"没变更"掩盖）
+- **锁占用（另一实例正在跑）**：本轮让位 → 写 `overall: SKIPPED_LOCK`，**不动**登录提示、退出码 0
+  （靠"状态文件是否在本次启动之后被写过"判断，避免拿上一晚的 OK 误判成功、误清提示）
 - **看详情**：`cat ~/ws_daily/state/health.txt`（总体 + 各变体最近一次 + 日志路径）
 - **消除提示**：`~/ws_daily/ack_last_failure.sh`（把内容追加进 health.txt 作历史，然后删 `ATTENTION`）
 - **回退**：`.bashrc` 里删掉 `# >>> ws_daily failure notice` 标记块即可；备份见 `~/ws_daily_backup/<日期>/bashrc.before-banner`
