@@ -32,12 +32,34 @@
 
 ```
 ~/ws_daily/
-├── daily_build.sh  publish_release.sh  README.md
-├── src/ build/ payload/ state/      # dev 线（沿用历史路径，保住热构建缓存）
+├── daily_build.sh  publish_release.sh  check_failure.sh  ack_last_failure.sh  README.md
+├── src/ build/ payload/ state/      # dev 线（沿用历史路径，保住热构建缓存）；state/ 里另有 health.txt、ATTENTION
 ├── stable/{src,build,payload,state} # stable 线
 ├── out/                             # 两条线共用：<日期>_..._dev/、<日期>_..._stable/、INDEX.md、latest-dev|latest-stable
-└── logs/                            # daily_dev_<日期>.log、daily_stable_<日期>.log
+└── logs/                            # daily_dev_<日期>.log、daily_stable_<日期>.log、publish_<日期>.log
 ```
+
+## 失败看板（登录就知道）
+
+构建出问题时不用去翻日志：`state/ATTENTION` 一旦存在，**登录 x86 / 新开 shell 就会打印醒目提示**
+（`.bashrc` 里只有 3 行调用，逻辑在 `check_failure.sh`；没问题时完全静默、零打扰）：
+
+```
+╔════════════════════════════════════════════════════════════════════════╗
+║   ⚠️   ws_daily 每日构建：上一轮有问题，请看一眼                     ║
+╚════════════════════════════════════════════════════════════════════════╝
+  2026-09-25 01:23:41  overall=FAIL   dev=FAIL
+  updated: 2026-09-25 01:23:41     overall: FAIL     detail:  dev=FAIL
+    … 快速动作：看日志 / 发布日志 / out/INDEX.md / 消除提示 …
+```
+
+- **判定规则**：任一变体 `FAIL`/`PARTIAL_TA_ONLY`/`CONTAINER_DOWN`、发布真失败（退出码非 0 非 2）、
+  或**子进程退出码非 0 但状态文件没更新**（被 kill/崩溃）→ 置 `ATTENTION`；
+  只有「`all` 跑完且两条线都 `OK`（不是 `SKIPPED_UNCHANGED`）」或手动 ack 才清除
+  （跳过不清，避免长期失败被"没变更"掩盖）
+- **看详情**：`cat ~/ws_daily/state/health.txt`（总体 + 各变体最近一次 + 日志路径）
+- **消除提示**：`~/ws_daily/ack_last_failure.sh`（把内容追加进 health.txt 作历史，然后删 `ATTENTION`）
+- **回退**：`.bashrc` 里删掉 `# >>> ws_daily failure notice` 标记块即可；备份见 `~/ws_daily_backup/<日期>/bashrc.before-banner`
 
 ## 常用命令
 
@@ -48,6 +70,8 @@
 FORCE=1 ~/ws_daily/daily_build.sh stable # 强制重建（commit 没变也编）
 tail -f ~/ws_daily/logs/daily_dev_$(date +%Y%m%d).log
 ls ~/ws_daily/out/latest-dev/ ; cat ~/ws_daily/out/INDEX.md ; cat ~/ws_daily/state/last_run.txt
+cat ~/ws_daily/state/health.txt          # 失败看板：最近一次总体状态
+~/ws_daily/ack_last_failure.sh           # 消除登录提示
 ```
 
 可调环境变量：`TA_BRANCH`/`NP_BRANCH`（覆盖默认分支）、`JOBS`（默认 64）、`KEEP_DAYS`/`KEEP_MIN`（14/3）、`FORCE`、
