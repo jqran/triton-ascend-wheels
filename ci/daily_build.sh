@@ -26,6 +26,36 @@ set -uo pipefail
 W=${WS_DAILY_ROOT:-$HOME/ws_daily}
 VARIANT=${1:-${VARIANT:-dev}}
 
+# ---------------------------------------------------------------- 失败看板
+# 目的：构建出问题时，**登录 x86 就能立刻看到**（.bashrc 调 check_failure.sh 读状态）。
+#   state/health.txt   人读的最近一次状态（总体 + 各变体 + 日志路径）
+#   state/ATTENTION    存在 = 有待确认的问题；登录提示由它触发，ack_last_failure.sh 消除
+# 规则：FAIL / PARTIAL_TA_ONLY / CONTAINER_DOWN / 发布真失败 → 置 ATTENTION；
+#       只有「all 跑完且两条线都是 OK（不是 SKIPPED_UNCHANGED）」或手动 ack 才清除。
+mark_health() {   # $1=overall(OK|PARTIAL|FAIL|SKIPPED)  $2=detail  $3=clear(bool: 仅 all 且无跳过时为 1)
+  local overall=$1 detail=$2 clear=${3:-0} ts hstate
+  ts=$(date '+%F %T')
+  mkdir -p "$W/state"
+  hstate=$W/state/health.txt
+  {
+    echo "updated: $ts"
+    echo "overall: $overall"
+    echo "detail: $detail"
+    echo "run: variant=$VARIANT clear=$clear"
+    echo "log: ${LOG:-（all 模式看各变体日志与 logs/publish_*.log）}"
+    echo "--- 各变体最近一次 ---"
+    for pair in "dev:$W/state/last_run.txt" "stable:$W/stable/state/last_run.txt"; do
+      pn=${pair%%:*}; pr=${pair#*:}
+      [ -f "$pr" ] && printf '%-8s %s\n' "$pn" "$(tail -1 "$pr")"
+    done
+  } > "$hstate"
+  case "$overall" in
+    FAIL|PARTIAL|CONTAINER_DOWN) printf '%s  overall=%s  %s\n' "$ts" "$overall" "$detail" > "$W/state/ATTENTION" ;;
+    *) [ "$clear" = 1 ] && rm -f "$W/state/ATTENTION" ;;
+  esac
+  return 0
+}
+
 # all：串行跑两个变体（互不干扰，各自加锁）；两条线都建完后**一次性**发布成同一条 release
 if [ "$VARIANT" = "all" ]; then
   rc=0
@@ -38,6 +68,7 @@ if [ "$VARIANT" = "all" ]; then
   done
 
   # ---- 发布：一个日期一条 release，把当天两条线的 wheel 一起发上去 ----
+  PUB_RC=0                     # 0=成功/未启用；2=无凭据（预期，不算问题）；其它=真失败
   if [ "${PUBLISH:-1}" = "1" ] && [ -x "$W/publish_release.sh" ]; then
     PDIRS=()
     for st in "$W/state/last_run.txt" "$W/stable/state/last_run.txt"; do
@@ -55,9 +86,11 @@ if [ "$VARIANT" = "all" ]; then
       PLOG=$W/logs/publish_$(date +%Y%m%d).log
       echo "[$(date '+%F %T')] ========== 发布 release（${#PDIRS[@]} 条线：$(basename -a "${PDIRS[@]}" | tr '\n' ' ')） =========="
       if "$W/publish_release.sh" "${PDIRS[@]}" >"$PLOG" 2>&1; then
+        PUB_RC=0
         echo "[$(date '+%F %T')] ========== 发布完成（日志 $PLOG） =========="
       else
         pv=$?
+        PUB_RC=$pv
         echo "[$(date '+%F %T')] ========== 发布退出码=$pv（未配凭据=2 属预期；细节见 $PLOG） =========="
       fi
       grep -E "^publish:" "$PLOG" 2>/dev/null | tail -6
@@ -65,7 +98,34 @@ if [ "$VARIANT" = "all" ]; then
       echo "[$(date '+%F %T')] ========== 没有可发布的产物，跳过发布 =========="
     fi
   fi
-  exit $rc
+  # ---- 失败看板：汇总两条线 + 发布结果 → state/health.txt + state/ATTENTION（登录即可见）----
+  OV=OK; DET=""; NSKIP=0
+  for pair in "dev:$W/state/last_run.txt" "stable:$W/stable/state/last_run.txt"; do
+    n=${pair%%:*}; st=${pair#*:}
+    if [ ! -f "$st" ]; then OV=FAIL; DET="$DET $n=无记录"; continue; fi
+    s=$(printf '%s' "$(tail -1 "$st")" | sed -n 's/.* status=\([^ ]*\).*/\1/p')
+    case "$s" in
+      OK) ;;
+      SKIPPED_UNCHANGED) NSKIP=$((NSKIP+1)) ;;
+      PARTIAL_TA_ONLY) [ "$OV" = FAIL ] || OV=PARTIAL; DET="$DET $n=PARTIAL_TA_ONLY" ;;
+      *) OV=FAIL; DET="$DET $n=${s:-未知}" ;;
+    esac
+  done
+  case "$PUB_RC" in
+    0|2) ;;                                   # 2 = 未配凭据，属预期
+    *) OV=FAIL; DET="$DET 发布失败(rc=$PUB_RC)" ;;
+  esac
+  # 子变体退出码非 0 但状态文件没反映（例如被 kill / 崩溃，来不及写 last_run.txt）→ 也算失败
+  if [ "$rc" -ne 0 ] && [ "$OV" = OK ]; then OV=FAIL; DET="$DET 子变体退出码=$rc（状态文件可能没更新）"; fi
+  [ -n "$DET" ] || DET="两条线都正常"
+  CLEAR=0; [ "$OV" = OK ] && [ "$NSKIP" -eq 0 ] && CLEAR=1   # 都真跑成功才清提示（跳过不清，避免掩盖旧问题）
+  mark_health "$OV" "$DET" "$CLEAR"
+  if [ "$OV" = OK ]; then
+    echo "[$(date '+%F %T')] ========== 失败看板 overall=OK（$DET）$([ $CLEAR = 1 ] && echo '，已清除登录提示') =========="
+    exit $rc
+  fi
+  echo "[$(date '+%F %T')] ========== 失败看板 overall=$OV（$DET）→ 登录时会看到提示（消除：$W/ack_last_failure.sh） =========="
+  exit 1
 fi
 
 case "$VARIANT" in
@@ -123,6 +183,7 @@ ensure_container() {
   else
     log "❌ 容器 $CONTAINER 不可用，终止（手动 docker start $CONTAINER 后重跑）"
     echo "$(date '+%F %T') variant=$VARIANT status=CONTAINER_DOWN log=$LOG" > "$STATE/last_run.txt"
+    mark_health CONTAINER_DOWN "容器 $CONTAINER 起不来（docker start 后重试仍不可用）" 0
     exit 1
   fi
 }
@@ -435,6 +496,12 @@ elif [ $TA_OK -eq 1 ]; then STATUS=PARTIAL_TA_ONLY
 else STATUS=FAIL; fi
 log "==================== ws_daily 结束（$VARIANT） status=$STATUS ===================="
 echo "$(date '+%F %T') variant=$VARIANT status=$STATUS out=${OUTDIR:-none} log=$LOG" > "$STATE/last_run.txt"
+# 失败看板（单变体：成功也不清提示，避免掩盖另一条线的问题；清除要靠 all 全绿或手动 ack）
+case "$STATUS" in
+  OK)              mark_health OK      "本变体 OK" 0 ;;
+  PARTIAL_TA_ONLY) mark_health PARTIAL "本变体 PARTIAL_TA_ONLY（TA 成功、NPUIR 失败，包内无工具链）" 0 ;;
+  *)               mark_health FAIL    "本变体 $STATUS" 0 ;;
+esac
 if [ "$STATUS" = OK ]; then
   echo "$(git -C "$TA_REPO" rev-parse HEAD) $(git -C "$NP_REPO" rev-parse HEAD)" > "$STATE/last_success.txt"
 else
