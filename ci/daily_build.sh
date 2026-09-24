@@ -41,7 +41,14 @@ if [ "$VARIANT" = "all" ]; then
   if [ "${PUBLISH:-1}" = "1" ] && [ -x "$W/publish_release.sh" ]; then
     PDIRS=()
     for st in "$W/state/last_run.txt" "$W/stable/state/last_run.txt"; do
-      d=$(sed -n 's/.* out=\([^ ]*\).*/\1/p' "$st" 2>/dev/null | tail -1)
+      [ -f "$st" ] || continue
+      line=$(tail -1 "$st")
+      stat=$(printf '%s' "$line" | sed -n 's/.* status=\([^ ]*\).*/\1/p')
+      case "$stat" in
+        OK|PARTIAL_TA_ONLY) ;;                 # 本次真的产出了新东西
+        *) continue ;;                         # SKIPPED_UNCHANGED / FAIL：别把上一版当本次产物重复发布
+      esac
+      d=$(printf '%s' "$line" | sed -n 's/.* out=\([^ ]*\).*/\1/p')
       if [ -n "$d" ] && [ -d "$d" ] && ls "$d"/*.whl >/dev/null 2>&1; then PDIRS+=("$d"); fi
     done
     if [ ${#PDIRS[@]} -gt 0 ]; then
