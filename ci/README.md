@@ -2,12 +2,13 @@
 
 每天 **01:00**（cron，`daily_build.sh all`）在同一台 x86 构建机（Ubuntu 24.04、无 sudo、docker 容器内构建）上串行构建并发布**两条产品线**：
 
-| 变体 | 源码 | release tag 形如 | 说明 |
+| 变体 | 源码 | release 里的 asset 形如 | 说明 |
 |---|---|---|---|
-| **dev** | triton-ascend `main-dev` + AscendNPU-IR `master` | `20260922-ta79d156db-npuir8d49415f-dev` | 开发线，最新特性 |
-| **stable** | triton-ascend `main` + AscendNPU-IR `stable` | `20260922-ta<sha8>-npuir<sha8>-stable` | 稳定线（发布分支 + sync 快照） |
+| **dev** | triton-ascend `main-dev` + AscendNPU-IR `master` | `triton_ascend-3.6.0.dev0+git<sha8>-*.whl` | 开发线，最新特性 |
+| **stable** | triton-ascend `main` + AscendNPU-IR `stable` | `triton_ascend-3.6.0+git<sha8>-*.whl` | 稳定线（发布分支 + sync 快照） |
 
-两条线各自独立工作区、独立构建缓存、独立 state，**产物共用一个 `out/`** 与同一套发布流程。
+两条线各自独立工作区、独立构建缓存、独立 state，**产物共用一个 `out/`**，并按**日期**合并发布成同一条 release
+（tag 形如 `20260924`，两条线各一个 wheel asset —— 见下方「发布」）。
 
 ## 每条线的流程
 
@@ -17,8 +18,9 @@
    （`-t --bisheng-compiler $(readlink -f ~/Ascend/cann)/tools/bisheng_compiler/bin`，当前 CANN = 9.3.0）
 3. 整理 payload → 构建 TA wheel（经上游 `TRITON_ASCEND_BISHENGIR_PATH` 把 payload 打进 `triton/backends/ascend/bishengir/`，二合一）
 4. 打包到 `out/<日期>_ta<sha8>_npuir<sha8>_<variant>/`（wheel + payload tar.gz + BUILD_INFO）+ 刷新 `out/INDEX.md`、`out/latest-<variant>`
-5. 发布到 **https://github.com/jqran/triton-ascend-wheels**（release 说明由 BUILD_INFO 自动生成：两条线各自的 commit 与 message、
-   子模块指针、glibc / CANN 版本、wheel md5、已知问题）
+5. 两条线都建完后**合并发布成一条 release**（tag = 日期，如 `20260924`；两条线各一个 wheel asset，说明由 BUILD_INFO
+   自动生成：对照表 + 每变体的 commit/message、子模块指针、glibc / CANN 版本、wheel md5、已知问题）→
+   **https://github.com/jqran/triton-ascend-wheels**
 6. 保留 14 天且至少 3 份；两个仓库 commit 与上次成功构建相同则跳过（`FORCE=1` 强制）
 
 ## 目录布局
@@ -48,10 +50,26 @@ ls ~/ws_daily/out/latest-dev/ ; cat ~/ws_daily/out/INDEX.md ; cat ~/ws_daily/sta
 
 ## 发布（GitHub release）
 
+**口径：一个日期一条 release**（tag = 日期，如 `20260924`），当天两条线各一个 wheel asset：
+
+| 变体 | 源码 | asset |
+|---|---|---|
+| dev | triton-ascend `main-dev` + AscendNPU-IR `master` | `triton_ascend-3.6.0.dev0+git<sha8>-*.whl` |
+| stable | triton-ascend `main` + AscendNPU-IR `stable` | `triton_ascend-3.6.0+git<sha8>-*.whl` |
+
+- **为什么合并**（2026-09-24 定）：GitHub 的 release **列表顺序没有任何 API 字段可设置** —— 实测
+  `created_at`（其实是 tag 指向 commit 的 committer date）/`updated_at`/`published_at` 都不能决定可见顺序，
+  且列表接口有几十秒的索引延迟；两条 release 的 `created_at` 相同时组内顺序未定义，于是同一晚的 dev/stable
+  会在页面上翻来覆去（出现过 `stable dev dev stable`）。合并成一条后页面每天一行，顺序天然固定。
+  （脚本仍会用合成 commit 把 release 的 `created_at` 设成当天构建时间，跨天顺序也稳定。）
+- `all` 模式：两条线都构建完才由父进程发布（子进程带 `PUBLISH_DEFER=1`）；单跑 `dev`/`stable` 时构建完即发布，
+  会**并入当天那条 release**（说明按变体分节，`<!-- variant:xxx -->` 标记，只替换本次涉及的分节）
+- 说明由 BUILD_INFO 自动生成：头部一张「两条线对照表」，然后每个变体一节（组件 commit + message、子模块指针、
+  二合一工具链清单、安装命令、已知问题）
 - 凭据二选一：`~/.config/ws_daily/gh_token`（fine-grained PAT，只授权该仓库 Contents 读写）或 **x86 上已登录的 gh**
   （`~/.local/bin/gh`，脚本自动 `gh auth token`；cron 下用绝对路径）。都没有则**优雅跳过**（退出码 2，只记日志）
-- 幂等：tag 已存在 → **更新**标题/说明；同名 asset 已存在 → 跳过上传
-- 手动补发：`~/ws_daily/publish_release.sh ~/ws_daily/out/<目录或 latest-dev>`
+- 幂等：release 已存在 → 合并更新说明（未涉及变体保持原样）；同名 asset 已存在 → 跳过上传
+- 手动补发：`~/ws_daily/publish_release.sh ~/ws_daily/out/<目录> [<另一个目录> ...]`（可一次传两条线）
 - ⚠️ 上传 asset 时 `name=` 必须 URL 编码，否则 `+` 被当空格、GitHub 存成 `.`，说明里的下载链接会 404（脚本已处理）
 
 ## 已知坑（都已在脚本里处理）
