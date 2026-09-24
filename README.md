@@ -3,8 +3,12 @@
 [triton-ascend](https://github.com/triton-lang/triton-ascend) 的**每日自动构建** wheel 发布点。
 
 每个 release 对应**一天**的构建，产物是**二合一 wheel**：triton-ascend 本体 + AscendNPU-IR 的 bishengir 工具链
-（`bishengir-compile` / `bishengir-opt` / `hivmc` / `hivmc-a5` + 9 个模板库 `.bc`），装完即自带工具链，
+（`bishengir-compile` / `bishengir-opt` / `hivmc` + 9 个模板库 `.bc`），装完即自带工具链，
 不需要再单独往环境里部署 bishengir。
+
+> 2026-09-25 起不再随包提供 `hivmc-a5`：它只是 `hivmc` 的同内容副本（同一颗二进制两个名字），源码里没有任何
+> 调用点（A5 走 `bishengir-compile` 内的 regbase 流水线，A3 只用 `hivmc --version` 做版本探测）。
+> **20260924 及更早的 release 里仍带 `hivmc-a5`（wheel 内 13 项），是正常的。**
 
 ## 构建方式
 
@@ -46,7 +50,7 @@ python - <<'PY'
 import zipfile, glob
 z = zipfile.ZipFile(glob.glob("triton_ascend-*.whl")[0])
 n = [x for x in z.namelist() if "bishengir/" in x]
-print(len(n), "bishengir entries")   # 期望 13（4 个 bin + 9 个 .bc）
+print(len(n), "bishengir entries")   # 12（3 个 bin + 9 个 .bc）；20260924 及更早的包是 13（多一个 hivmc-a5）
 PY
 ```
 
