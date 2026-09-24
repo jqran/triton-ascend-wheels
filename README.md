@@ -35,8 +35,8 @@ pip install --no-deps --force-reinstall <release 中 wheel 的下载地址>
 - release 标题：`[每日] 2026-09-24 · dev + stable`
 - wheel 文件名：`triton_ascend-<版本>+git<8位>-cp311-cp311-linux_x86_64.whl`
   （dev 线带 `.dev0`：`triton_ascend-3.6.0.dev0+git<8位>-...`）
-- ⚠️ **2026-09-24 之前**的 tag 形如 `20260923-ta7b4ee867-npuir15a14c58-dev`（每条线一条 release），
-  那批历史 release 全部保留，可按同样的方式下载
+- ⚠️ **2026-09-24 之前**的 release 是**每条线一条**（tag 形如 `20260923-ta7b4ee867-npuir15a14c58-dev`）；
+  这批历史已**迁移**成按日期的 release（`20260922`/`20260923`/`20260924`，每条含两个 wheel），旧 tag 已删除
 
 ## 校验
 
@@ -62,7 +62,7 @@ PY
 > 为什么一天一条：GitHub 的 release 列表顺序无法设置（实测 `created_at`/`updated_at`/`published_at` 都不是排序键），
 > 一天两条时同一晚的 dev/stable 会在页面上互换位置。合并后页面每天一行，顺序天然固定。
 
-**历史 release 全部保留**（不自动清理），便于回滚到早先的构建。下载：
+**历史 release 全部保留**（不自动清理），便于回滚到早先的构建；截至 2026-09-24 页面为 `20260922` / `20260923` / `20260924` 三条。下载：
 
 ```bash
 # 最新一晚（两条线的 wheel 一起下）
