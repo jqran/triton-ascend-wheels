@@ -12,8 +12,13 @@
 #   （bishengir-compile/opt + hivmc + 9 个模板库 .bc）→ 经上游 TRITON_ASCEND_BISHENGIR_PATH 打进 TA wheel
 #   （二合一）→ 打包到 out/<日期>_ta<sha8>_npuir<sha8>_<variant>/ → 发布到 GitHub release
 #
+#   发布口径（2026-09-24 起）：**一个日期一条 release**（tag = 日期，如 20260924），两条线各一个
+#   wheel asset —— GitHub 的 release 列表顺序不可设置，合并后页面每天一行、顺序天然固定。
+#   `all` 模式下两条线都构建完才发布（子进程用 PUBLISH_DEFER=1 跳过各自发布）；
+#   单跑 dev/stable 时构建完立即发布，会并入当天那条 release（说明按变体分节合并）。
+#
 #   手动跑：~/ws_daily/daily_build.sh stable        （或 dev / all）
-#   日志：  ~/ws_daily/logs/daily_<variant>_<日期>.log
+#   日志：  ~/ws_daily/logs/daily_<variant>_<日期>.log（发布日志 logs/publish_<日期>.log）
 #   开关： JOBS=64 FORCE=1 PUBLISH=0 KEEP_DAYS=14 KEEP_MIN=3 KEEP_PER_VARIANT=1
 # =============================================================================
 set -uo pipefail
@@ -21,14 +26,38 @@ set -uo pipefail
 W=${WS_DAILY_ROOT:-$HOME/ws_daily}
 VARIANT=${1:-${VARIANT:-dev}}
 
-# all：串行跑两个变体（互不干扰，各自加锁）
+# all：串行跑两个变体（互不干扰，各自加锁）；两条线都建完后**一次性**发布成同一条 release
 if [ "$VARIANT" = "all" ]; then
   rc=0
+  PUBLISH_DEFER=1          # 子进程只构建不发布，否则会变成两条 release（旧口径）
+  export PUBLISH_DEFER
   for v in dev stable; do
     echo "[$(date '+%F %T')] ========== 变体 $v =========="
     "$0" "$v" || rc=1
     echo "[$(date '+%F %T')] ========== 变体 $v 结束（rc=$?） =========="
   done
+
+  # ---- 发布：一个日期一条 release，把当天两条线的 wheel 一起发上去 ----
+  if [ "${PUBLISH:-1}" = "1" ] && [ -x "$W/publish_release.sh" ]; then
+    PDIRS=()
+    for st in "$W/state/last_run.txt" "$W/stable/state/last_run.txt"; do
+      d=$(sed -n 's/.* out=\([^ ]*\).*/\1/p' "$st" 2>/dev/null | tail -1)
+      if [ -n "$d" ] && [ -d "$d" ] && ls "$d"/*.whl >/dev/null 2>&1; then PDIRS+=("$d"); fi
+    done
+    if [ ${#PDIRS[@]} -gt 0 ]; then
+      PLOG=$W/logs/publish_$(date +%Y%m%d).log
+      echo "[$(date '+%F %T')] ========== 发布 release（${#PDIRS[@]} 条线：$(basename -a "${PDIRS[@]}" | tr '\n' ' ')） =========="
+      if "$W/publish_release.sh" "${PDIRS[@]}" >"$PLOG" 2>&1; then
+        echo "[$(date '+%F %T')] ========== 发布完成（日志 $PLOG） =========="
+      else
+        pv=$?
+        echo "[$(date '+%F %T')] ========== 发布退出码=$pv（未配凭据=2 属预期；细节见 $PLOG） =========="
+      fi
+      grep -E "^publish:" "$PLOG" 2>/dev/null | tail -6
+    else
+      echo "[$(date '+%F %T')] ========== 没有可发布的产物，跳过发布 =========="
+    fi
+  fi
   exit $rc
 fi
 
@@ -370,7 +399,8 @@ PY
   } > "$OUT/INDEX.md"
 
   # 发布到 GitHub release（best-effort：没配凭据 / 上传失败都不影响构建结果）
-  if [ "${PUBLISH:-1}" = "1" ] && [ -x "$W/publish_release.sh" ]; then
+  # all 模式下子进程被父进程设了 PUBLISH_DEFER=1：两条线都建完由父进程合并发布成一条 release
+  if [ "${PUBLISH:-1}" = "1" ] && [ "${PUBLISH_DEFER:-0}" != "1" ] && [ -x "$W/publish_release.sh" ]; then
     log "[发布] 上传 wheel 到 GitHub release（repo=${GH_RELEASE_REPO:-jqran/triton-ascend-wheels}）"
     if "$W/publish_release.sh" "$OUTDIR" >>"$LOG" 2>&1; then
       log "[发布] ✅ 完成"
