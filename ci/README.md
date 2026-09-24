@@ -16,6 +16,11 @@
    llvm-project 优先走本地种子 `~/workspace/AscendNPU-IR/third-party/llvm-project`，不够新自动回退 gitcode）
 2. 容器 **ubuntu20**（Ubuntu 20.04 / glibc 2.31）内构建 AscendNPU-IR：`bishengir-compile/opt` + `hivmc` + 9 个模板库 `.bc`
    （`-t --bisheng-compiler $(readlink -f ~/Ascend/cann)/tools/bisheng_compiler/bin`，当前 CANN = 9.3.0）
+   - 📦 **不再打包 `hivmc-a5`**（2026-09-25 起的包生效）。它本来只是 `hivmc` 的**同内容副本**（上游 packaging 也直接
+     `cp`），而源码里 `hivmc-a5` **0 个调用点**：A5（Ascend950PR）走 `bishengir-compile` 内的 regbase 流水线（in-process，
+     起子进程 `bishengir-compile-a5` 的分支被注释掉了），A3 路径也只用 `hivmc --version` 做版本探测
+     （`$BISHENG_INSTALL_PATH` → `$PATH`，失败仅 warning）。a5 实测：删掉后 `chunk_gla_fwd_o_gk` 10/10 通过、
+     PATH 金丝雀 0 次拦截。收益：wheel 少一份独立压缩 ≈43MB
 3. 整理 payload → 构建 TA wheel（经上游 `TRITON_ASCEND_BISHENGIR_PATH` 把 payload 打进 `triton/backends/ascend/bishengir/`，二合一）
 4. 打包到 `out/<日期>_ta<sha8>_npuir<sha8>_<variant>/`（wheel + payload tar.gz + BUILD_INFO）+ 刷新 `out/INDEX.md`、`out/latest-<variant>`
 5. 两条线都建完后**合并发布成一条 release**（tag = 日期，如 `20260924`；两条线各一个 wheel asset，说明由 BUILD_INFO
