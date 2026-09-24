@@ -152,6 +152,16 @@ for i in "${ORDER[@]}"; do
   BC_CNT=$(get 模板库条目)
   NPUIR_OK=1
   case "$(get 'AscendNPU-IR')" in *build_ok=0*) NPUIR_OK=0 ;; esac
+  # wheel 里到底有没有 hivmc-a5（2026-09-25 起不再打包；说明按实际情况写，重发老包也不会写错）
+  HAS_A5=$(python3 - "$W" <<'PY'
+import sys, zipfile
+try:
+    z = zipfile.ZipFile(sys.argv[1])
+    print("yes" if any(n.endswith("bishengir/bin/hivmc-a5") for n in z.namelist()) else "no")
+except Exception:
+    print("no")
+PY
+)
 
   {
     echo "## $V — triton-ascend \`$TA_BR\` + AscendNPU-IR \`$NP_BR\`"
@@ -179,9 +189,22 @@ for i in "${ORDER[@]}"; do
     echo "wheel 内 \`triton/backends/ascend/bishengir/\`：$(get 'wheel 内 bishengir 条目')"
     echo
     echo '```'
-    echo "bin/{bishengir-compile, bishengir-opt, hivmc, hivmc-a5}"
+    if [ "$HAS_A5" = "yes" ]; then
+      echo "bin/{bishengir-compile, bishengir-opt, hivmc, hivmc-a5}"
+    else
+      echo "bin/{bishengir-compile, bishengir-opt, hivmc}"
+    fi
     echo "lib/{host.bc, meta_op.{aic,aiv,mix}.{c220,c310}.bc}   # ${BC_CNT:-共 9 个}"
     echo '```'
+    echo
+    if [ "$HAS_A5" = "yes" ]; then
+      echo "注：本包的 \`hivmc-a5\` 与 \`hivmc\` 是**同一份二进制**（同内容两个名字，上游打包脚本也是直接复制），"
+      echo "保留 \`-a5\` 名字只为兼容按名查找的旧工具链。hivmc 已开源进 bishengir 仓（A3+A5 流水线在同一颗 binary 里）。"
+    else
+      echo "注：**自 2026-09-25 起不再随包提供 \`hivmc-a5\`**。A5（Ascend950PR）走 \`bishengir-compile\` 内的 regbase 流水线，"
+      echo "运行期不调用任何外部 hivmc；A3 路径也只用 \`hivmc --version\` 做版本探测（先 \`\$BISHENG_INSTALL_PATH\` 再 \`\$PATH\`，"
+      echo "找不到只 warning，可用 \`--hivmc-version\` 指定）。依赖 \`hivmc-a5\` 的老流程请用 20260924 及更早的包。"
+    fi
     echo
     echo "版本：$(sed -n '/^--- bishengir 版本 ---/,/^--- 产物 md5 ---/p' "$INFO" | sed -n '2p')"
     echo
