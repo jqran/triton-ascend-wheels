@@ -302,7 +302,16 @@ if [ $NPUIR_OK -eq 1 ]; then
   rm -rf "$PAYLOAD"
   mkdir -p "$PAYLOAD/bin" "$PAYLOAD/lib"
   cp -f "$NP_BUILD/bin/bishengir-compile" "$NP_BUILD/bin/bishengir-opt" "$NP_BUILD/bin/hivmc" "$PAYLOAD/bin/"
-  cp -f "$PAYLOAD/bin/hivmc" "$PAYLOAD/bin/hivmc-a5"   # a5 侧两个名字都在，兼容不同查找逻辑
+  # 不再打包 hivmc-a5（2026-09-24 决定，2026-09-25 起的包生效）——它是 hivmc 的同内容副本，实测没人调用：
+  #   · A5（Ascend950PR，我们的 target）走 `bishengir-compile` 内的 **regbase 流水线**
+  #     （`regbase/Driver.cpp: runRegBaseCompile` → `runRegBasePipeline`，in-process）；那条会起子进程
+  #     `bishengir-compile-a5` 的分支**在源码里被注释掉了** → 整条 A5 路径不碰任何外部 hivmc
+  #   · A3/910B 路径（`runBiShengIRPipeline`）也只把 `hivmc` 用于**版本探测**（`detectHIVMCVersion("hivmc")` →
+  #     `$BISHENG_INSTALL_PATH` → `$PATH`，失败仅 warning、可用 --hivmc-version 指定），流水线同样 in-process
+  #   · 源码里 `hivmc-a5` 有 **0 个调用点**（只有闭源时代遗留的子工程 target 名、测试 RUN 行、上游 packaging 的 cp）
+  #   · a5 实测（2026-09-24，包 79d156db）：包内删掉 hivmc-a5 后 chunk_gla_fwd_o_gk 10/10 通过，
+  #     且 PATH 金丝雀 0 次拦截（连 CANN 那份都没被回退调用）
+  #   · 收益：wheel 里少一份独立压缩 ≈43MB（zip 不做内容去重）
   # 只收最终产物：排除 *.bc.linked.bc（llvm-link 的中间文件，正常构建会自己删，异常时会残留在 lib/ 下）
   for f in "$NP_BUILD"/lib/*.bc; do
     case "$(basename "$f")" in *.linked.bc) continue;; esac
