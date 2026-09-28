@@ -464,7 +464,8 @@ PY
     echo "--- triton-ascend submodules ---"; git -C "$TA_REPO" submodule status
     echo "--- AscendNPU-IR submodules ---"; git -C "$NP_REPO" submodule status 2>/dev/null
     echo "--- bishengir 版本 ---"; "$PAYLOAD/bin/bishengir-opt" --version 2>&1 | head -3
-    echo "--- 产物 md5 ---"; (cd "$OUTDIR" && md5sum ./* 2>/dev/null)
+    # ⚠️ 只列真实产物：BUILD_INFO.txt 是这次重定向的目标（此刻为空/半成品），把它的 hash 写进自己毫无意义
+    echo "--- 产物 md5 ---"; (cd "$OUTDIR" && for f in ./*; do [ "$(basename "$f")" = BUILD_INFO.txt ] || md5sum "$f"; done 2>/dev/null)
   } > "$OUTDIR/BUILD_INFO.txt"
   ln -sfn "$OUTDIR" "$OUT/latest-$VARIANT"
   log "[打包] $OUTDIR（wheel + payload + BUILD_INFO）"
