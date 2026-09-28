@@ -107,7 +107,7 @@ done
 SORT_DATE=""
 [ -n "$SORT_EPOCH" ] && SORT_DATE=$(date -u -d "@$SORT_EPOCH" +%Y-%m-%dT%H:%M:%SZ)
 
-TITLE_HINT="[每日] $DATE_DISPLAY · $VARIANT_LIST"    # 仅供参考；实际标题在 Python 里按合并后的变体集合生成
+TITLE_HINT="$DATE_DISPLAY · $VARIANT_LIST"    # 仅供参考；实际标题在 Python 里按合并后的变体集合生成（2026-09-27 起去掉 "[每日]" 前缀，网页列表里能多看几个字）
 echo "publish: repo=$REPO tag=$TAG 变体=$VARIANT_LIST 排序键=${SORT_DATE:-未设置} 凭据=$TOKEN_SRC"
 [ "$DATE_MIXED" = 1 ] && echo "publish: ⚠️ 入参目录日期不一致（${DATES[*]}）→ 统一发到 $TAG 这条 release"
 
@@ -264,7 +264,7 @@ def merge_body(old, head, sections):
 
 
 def title_of(order):
-    return f"[每日] {datestr} · " + " + ".join(order)
+    return f"{datestr} · " + " + ".join(order)
 
 
 def sort_commit():
