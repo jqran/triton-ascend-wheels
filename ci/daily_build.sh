@@ -408,8 +408,20 @@ if [ "${TA_SYNC:-0}" -eq 1 ]; then
   rm -f "$TA_REPO"/dist/*.whl 2>/dev/null
   BISH=""
   [ $NPUIR_OK -eq 1 ] && BISH="export TRITON_ASCEND_BISHENGIR_PATH=$PAYLOAD;"
-  log "[TA] 构建 wheel（入口 $ENTRY，bishengir 注入=$([ $NPUIR_OK -eq 1 ] && echo 是 || echo 否)）"
+  # 让 wheel 版本号带上日期（用户 2026-09-29 要求），例如：
+  #   dev    → triton_ascend-3.6.0.dev20260929+git<sha8>-cp311-cp311-linux_x86_64.whl
+  #   stable → triton_ascend-3.6.0.post20260929+git<sha8>-cp311-cp311-linux_x86_64.whl
+  # 机制：third_party/ascend/build/setup_patch.py::_get_version() 组装
+  #         基础版本(version.txt) + TRITON_WHEEL_VERSION_SUFFIX + "+git<sha8>"
+  #   ⚠️ suffix 里不能带 "+"：会与追加的 +git 组成两个加号 → 非法 PEP 440
+  #   dev 线    version.txt=3.6.0-dev → 直接接数字 3.6.0-dev20260929 → 归一化成 .dev20260929
+  #   stable 线 version.txt=3.6.0     → 用 .post<日期> → 3.6.0.post20260929
+  VERDATE=$(printf '%s' "$STAMP" | tr -cd '0-9' | cut -c1-8)
+  [ ${#VERDATE} -eq 8 ] || VERDATE=$(date +%Y%m%d)
+  if grep -qi dev "$TA_REPO/version.txt" 2>/dev/null; then VSFX="$VERDATE"; else VSFX=".post$VERDATE"; fi
+  log "[TA] 构建 wheel（入口 $ENTRY，bishengir 注入=$([ $NPUIR_OK -eq 1 ] && echo 是 || echo 否)，版本后缀=${VSFX}，基础版本=$(cat "$TA_REPO/version.txt" 2>/dev/null)）"
   TA_CMD="source $CANN_ENV >/dev/null 2>&1; cd $TA_REPO && export PATH=$PY311:\$PATH LLVM_SYSPATH=$LLVM_PREBUILT \
+TRITON_WHEEL_VERSION_SUFFIX='$VSFX' \
 TRITON_BUILD_WITH_CCACHE=true TRITON_BUILD_WITH_CLANG_LLD=true TRITON_BUILD_PROTON=OFF \
 TRITON_APPEND_CMAKE_ARGS='-DTRITON_BUILD_UT=OFF'; $BISH python $ENTRY bdist_wheel"
   in_container "$TA_CMD" >>"$LOG" 2>&1
@@ -449,6 +461,7 @@ PY
     echo "triton-ascend: branch=$TA_BRANCH commit=$(git -C "$TA_REPO" rev-parse HEAD)"
     echo "AscendNPU-IR:  branch=$NP_BRANCH commit=$(git -C "$NP_REPO" rev-parse HEAD 2>/dev/null) (build_ok=$NPUIR_OK)"
     echo "wheel: $(basename "$WHL")  size=$(du -h "$WHL" | cut -f1)"
+    echo "wheel 版本后缀: ${VSFX:-未设置}（基础版本 $(cat "$TA_REPO/version.txt" 2>/dev/null | tr -d '\n')，日期取自 ${VERDATE:-?}）"
     echo "wheel 内 bishengir 条目: $BUNDLED"
     echo "NPUIR 构建: build.sh 退出码=${NP_BUILD_RC:-?}$([ "${NP_BUILD_RC:-1}" -ne 0 ] && [ $NPUIR_OK -eq 1 ] && echo '（已用 ninja -k 0 + 空 TU 顶替回退）')"
     echo "空 TU 顶替的模板源文件: $([ -s "$STATE/stubbed_srcs.txt" ] && tr '\n' ' ' < "$STATE/stubbed_srcs.txt" || echo 无)"
