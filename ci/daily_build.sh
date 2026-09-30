@@ -207,6 +207,8 @@ log "==================== ws_daily 开始（$VARIANT） ===================="
 log "TA=$TA_BRANCH  NPUIR=$NP_BRANCH  容器=$CONTAINER  -j $JOBS  保留 ${KEEP_DAYS}天/最少${KEEP_MIN}份"
 log "CANN=$CANN_ROOT  工作区=$ROOT"
 ensure_container
+probe_git_proxy
+log "源码获取网络模式：$GIT_NET_MODE"
 
 # ---------------------------------------------------------------- 1. 同步仓库
 # 首次运行（克隆）：dev 变体通常已有；stable 变体第一次会自动克隆
@@ -214,17 +216,54 @@ bootstrap_repo() {  # bootstrap_repo <repo> <url> <branch> <name>
   local repo=$1 url=$2 br=$3 name=$4
   [ -d "$repo/.git" ] && return 0
   log "[$name] 首次：克隆 $url ($br)"
-  git clone --branch "$br" --single-branch "$url" "$repo" >>"$LOG" 2>&1 || { log "[$name] ❌ 克隆失败"; return 1; }
+  for i in 1 2; do
+    rm -rf "$repo"
+    gitnet clone --branch "$br" --single-branch "$url" "$repo" >>"$LOG" 2>&1 && return 0
+    log "[$name] 克隆失败（第 $i 次，网络模式：$GIT_NET_MODE）"
+  done
+  log "[$name] ❌ 克隆失败（网络模式：$GIT_NET_MODE）"; return 1
+}
+
+# ---- 网络/代理策略（2026-09-30 事故）------------------------------------------------
+# 背景：`~/.gitconfig` 里配了 `http(s).proxy=http://127.0.0.1:7897`，那是**别的用户**在本机跑的
+#       代理进程；它一不在，git 就在 0 ms 内全部失败（"Couldn't connect to server"）→ 整晚不出包。
+# 规则：探测配置里的代理是否真的可连（≤3 s）：可连就照旧走它（通常更快），
+#       连不上就临时禁用代理直连（实测直连可用），并把实际模式写进日志/BUILD_INFO。
+GIT_NET_MODE="未探测"
+PROXY_OPTS=()
+probe_git_proxy() {
+  local p h port
+  p=$(git config --get http.proxy 2>/dev/null)
+  if [ -z "$p" ]; then PROXY_OPTS=(); GIT_NET_MODE="无代理（直连）"; return 0; fi
+  h=${p#*://}; h=${h%%/*}; port=${h##*:}; h=${h%%:*}
+  if timeout 3 bash -c "exec 3<>/dev/tcp/$h/$port" 2>/dev/null; then
+    PROXY_OPTS=(); GIT_NET_MODE="代理可用（$p）"
+  else
+    PROXY_OPTS=(-c http.proxy= -c https.proxy=); GIT_NET_MODE="代理 $p 不可达 → 走直连"
+  fi
+}
+
+# 带兜底的 git 调用：先按探测结论，失败再换另一种模式（每种最多 2 次）
+gitnet() {
+  local i
+  for i in 1 2; do
+    if [ ${#PROXY_OPTS[@]} -eq 0 ]; then
+      git "${PROXY_OPTS[@]}" "$@" && return 0
+      git -c http.proxy= -c https.proxy= "$@" && { GIT_NET_MODE="$GIT_NET_MODE（直连兜底成功）"; return 0; }
+    else
+      git "${PROXY_OPTS[@]}" "$@" && return 0
+      git "$@" && { GIT_NET_MODE="$GIT_NET_MODE（代理兜底成功）"; return 0; }
+    fi
+    [ $i -lt 2 ] && sleep 5
+  done
+  return 1
 }
 
 sync_repo() {
   local repo=$1 br=$2 name=$3 ok=0
-  log "[$name] fetch origin/$br"
-  for i in 1 2 3; do
-    if git -C "$repo" fetch --prune origin "$br" >>"$LOG" 2>&1; then ok=1; break; fi
-    log "[$name] fetch 失败（第 $i 次），10s 后重试"; sleep 10
-  done
-  [ $ok -eq 1 ] || { log "[$name] ❌ fetch 连续失败"; return 1; }
+  log "[$name] fetch origin/$br（网络模式：$GIT_NET_MODE）"
+  if gitnet -C "$repo" fetch --prune origin "$br" >>"$LOG" 2>&1; then ok=1; fi
+  [ $ok -eq 1 ] || { log "[$name] ❌ fetch 连续失败（网络模式：$GIT_NET_MODE）"; return 1; }
   git -C "$repo" checkout -f -B "$br" "origin/$br" >>"$LOG" 2>&1 || { log "[$name] ❌ checkout 失败"; return 1; }
   git -C "$repo" reset --hard "origin/$br" >>"$LOG" 2>&1
   git -C "$repo" clean -fd >>"$LOG" 2>&1          # 丢未跟踪文件；.gitignore 的构建产物保留→增量编译
@@ -250,7 +289,7 @@ update_submodules() {
       log "[$name] llvm 种子已含 pin ${PIN:0:12} → 跳过种子 fetch（省流量）"
     else
       log "[$name] llvm 种子缺 pin ${PIN:0:12} → 刷新种子（fetch --all，可能几百 MB）"
-      git -C "$LLVM_SEED" fetch --all --prune >>"$LOG" 2>&1 || log "[$name] ⚠️ llvm 种子 fetch 失败（继续）"
+      gitnet -C "$LLVM_SEED" fetch --all --prune >>"$LOG" 2>&1 || log "[$name] ⚠️ llvm 种子 fetch 失败（继续，网络模式：$GIT_NET_MODE）"
     fi
     git -C "$repo" config submodule.third-party/llvm-project.url "$LLVM_SEED" >>"$LOG" 2>&1
     if git -C "$repo" -c protocol.file.allow=always submodule update --init third-party/llvm-project >>"$LOG" 2>&1; then
@@ -258,8 +297,8 @@ update_submodules() {
     else
       log "[$name] ⚠️ 本地种子不够新，回退 gitcode 网络拉 llvm-project"
       git -C "$repo" submodule sync --recursive >>"$LOG" 2>&1
-      git -C "$repo" submodule update --init third-party/llvm-project >>"$LOG" 2>&1 \
-        || log "[$name] ❌ llvm-project 更新失败"
+      gitnet -C "$repo" submodule update --init third-party/llvm-project >>"$LOG" 2>&1 \
+        || log "[$name] ❌ llvm-project 更新失败（网络模式：$GIT_NET_MODE）"
     fi
   else
     has_submodule "$repo" "third-party/llvm-project" \
@@ -461,6 +500,7 @@ PY
     echo "triton-ascend: branch=$TA_BRANCH commit=$(git -C "$TA_REPO" rev-parse HEAD)"
     echo "AscendNPU-IR:  branch=$NP_BRANCH commit=$(git -C "$NP_REPO" rev-parse HEAD 2>/dev/null) (build_ok=$NPUIR_OK)"
     echo "wheel: $(basename "$WHL")  size=$(du -h "$WHL" | cut -f1)"
+    echo "源码获取网络: ${GIT_NET_MODE:-未探测}"
     echo "wheel 版本后缀: ${VSFX:-未设置}（基础版本 $(cat "$TA_REPO/version.txt" 2>/dev/null | tr -d '\n')，日期取自 ${VERDATE:-?}）"
     echo "wheel 内 bishengir 条目: $BUNDLED"
     echo "NPUIR 构建: build.sh 退出码=${NP_BUILD_RC:-?}$([ "${NP_BUILD_RC:-1}" -ne 0 ] && [ $NPUIR_OK -eq 1 ] && echo '（已用 ninja -k 0 + 空 TU 顶替回退）')"
