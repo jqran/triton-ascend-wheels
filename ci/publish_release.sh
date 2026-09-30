@@ -116,10 +116,10 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 # ---------- 头部：一眼看清这一天两条线各自是什么 ----------
 HEAD=$TMP/head.md
 {
-  echo "**构建日期**：$DATE_DISPLAY（本 release 含 ${#DIRS[@]} 条线：$VARIANT_LIST）｜ **Python**：cp311 / linux_x86_64"
-  [ "$DATE_MIXED" = 1 ] && echo "⚠️ 这两条产物不是同一天构建的（${DATES[*]}），按最新日期归档。"
+  echo "**Build date**: $DATE_DISPLAY (this release contains ${#DIRS[@]} line(s): $VARIANT_LIST) | **Python**: cp311 / linux_x86_64"
+  [ "$DATE_MIXED" = 1 ] && echo "⚠️ These two artifacts were not built on the same day (${DATES[*]}); they are filed under the latest date."
   echo
-  echo "| 变体 | 构建时间 | triton-ascend | AscendNPU-IR | 包 | wheel md5 |"
+  echo "| Variant | Built at | triton-ascend | AscendNPU-IR | Package | wheel md5 |"
   echo "|---|---|---|---|---|---|"
   for i in "${ORDER[@]}"; do
     INFO=${DIRS[$i]}/BUILD_INFO.txt
@@ -132,10 +132,10 @@ HEAD=$TMP/head.md
       "$(basename "${WHLS[$i]}")" "${SIZES[$i]}" "${MD5S[$i]}"
   done
   echo
-  echo "> 每天 01:00（cron）自动构建两条线：**dev** = triton-ascend \`main-dev\` + AscendNPU-IR \`master\`；"
-  echo "> **stable** = triton-ascend \`main\` + AscendNPU-IR \`stable\`。一个日期一条 release，两条线各一个 wheel；"
-  echo "> wheel 是**二合一包**（包内已捆绑 \`bishengir-compile/opt\` + \`hivmc\` + 9 个模板库 \`.bc\`）。"
-  echo "> 下载见下方 **Assets**。"
+  echo "> Two product lines are built automatically every day at 01:00 (cron): **dev** = triton-ascend \`main-dev\` + AscendNPU-IR \`master\`;"
+  echo "> **stable** = triton-ascend \`main\` + AscendNPU-IR \`stable\`. One release per date, one wheel per line."
+  echo "> Each wheel is a **self-contained bundle**: it already ships \`bishengir-compile\`, \`bishengir-opt\`, \`hivmc\` and the 9 template \`.bc\` libraries under \`triton/backends/ascend/bishengir/\`."
+  echo "> Download from **Assets** below."
 } > "$HEAD"
 
 # ---------- 每个变体一节（用标记包裹，便于增量合并）----------
@@ -166,27 +166,27 @@ PY
   {
     echo "## $V — triton-ascend \`$TA_BR\` + AscendNPU-IR \`$NP_BR\`"
     echo
-    echo "**构建时间**：$(get date) ｜ **产物**：\`$(basename "$W")\`（${SIZES[$i]}，md5 \`${MD5S[$i]}\`）"
-    [ "$NPUIR_OK" = 0 ] && echo "⚠️ **本次 NPUIR 构建失败**（build_ok=0）→ 该 wheel 内**不含** bishengir 工具链，仅供排查。"
-    [ -n "$CANN" ] && echo "**bisheng 编译器（模板库用）**：\`$CANN\`"
-    [ -n "$CONTAINER" ] && echo "**构建容器**：$CONTAINER"
+    echo "**Built at**: $(get date) | **Artifact**: \`$(basename "$W")\` (${SIZES[$i]}, md5 \`${MD5S[$i]}\`)"
+    [ "$NPUIR_OK" = 0 ] && echo "⚠️ **The NPUIR build failed this time** (build_ok=0) → this wheel does **not** contain the bishengir toolchain; for debugging only."
+    [ -n "$CANN" ] && echo "**bisheng compiler (used for template libraries)**: \`$CANN\`"
+    [ -n "$CONTAINER" ] && echo "**Build container**: $CONTAINER"
     echo
-    echo "### 组件 commit"
+    echo "### Component commits"
     echo
-    echo "| 组件 | 分支 | commit | commit message |"
+    echo "| Component | Branch | Commit | Commit message |"
     echo "|---|---|---|---|"
     echo "| triton-ascend | $TA_BR | \`$TA_SHA\` | $(subject_of triton-ascend | sed 's/|/\\|/g') |"
     echo "| AscendNPU-IR | $NP_BR | \`$NP_SHA\` | $(subject_of AscendNPU-IR | sed 's/|/\\|/g') |"
     echo
-    echo "子模块指针："
+    echo "Submodule pointers:"
     echo
     echo '```'
     sed -n '/^--- triton-ascend submodules ---/,/^--- bishengir 版本 ---/p' "$INFO" | grep -vE '^---|^$'
     echo '```'
     echo
-    echo "### 包内捆绑的 AscendNPU-IR 工具链（二合一）"
+    echo "### Bundled AscendNPU-IR toolchain"
     echo
-    echo "wheel 内 \`triton/backends/ascend/bishengir/\`：$(get 'wheel 内 bishengir 条目')"
+    echo "Inside the wheel at \`triton/backends/ascend/bishengir/\`: $(get 'wheel 内 bishengir 条目' | sed 's/ 项/ entries/')"
     echo
     echo '```'
     if [ "$HAS_A5" = "yes" ]; then
@@ -194,42 +194,44 @@ PY
     else
       echo "bin/{bishengir-compile, bishengir-opt, hivmc}"
     fi
-    echo "lib/{host.bc, meta_op.{aic,aiv,mix}.{c220,c310}.bc}   # ${BC_CNT:-共 9 个}"
+    echo "lib/{host.bc, meta_op.{aic,aiv,mix}.{c220,c310}.bc}   # $(printf '%s' "${BC_CNT:-9}" | grep -oE '[0-9]+' | head -1) files"
     echo '```'
     echo
     if [ "$HAS_A5" = "yes" ]; then
-      echo "注：本包的 \`hivmc-a5\` 与 \`hivmc\` 是**同一份二进制**（同内容两个名字，上游打包脚本也是直接复制），"
-      echo "保留 \`-a5\` 名字只为兼容按名查找的旧工具链。hivmc 已开源进 bishengir 仓（A3+A5 流水线在同一颗 binary 里）。"
+      echo "Note: \`hivmc-a5\` and \`hivmc\` in this package are **the same binary** (identical content under two names; the upstream packaging step simply copies it)."
+      echo "The \`-a5\` name is kept only for older toolchains that look the tool up by name. hivmc is now open source in the bishengir repository (the A3 and A5 pipelines live in the same binary)."
     else
-      echo "注：**自 2026-09-25 起不再随包提供 \`hivmc-a5\`**。A5（Ascend950PR）走 \`bishengir-compile\` 内的 regbase 流水线，"
-      echo "运行期不调用任何外部 hivmc；A3 路径也只用 \`hivmc --version\` 做版本探测（先 \`\$BISHENG_INSTALL_PATH\` 再 \`\$PATH\`，"
-      echo "找不到只 warning，可用 \`--hivmc-version\` 指定）。依赖 \`hivmc-a5\` 的老流程请用 20260924 及更早的包。"
+      echo "Note: **\`hivmc-a5\` is no longer shipped as of 2026-09-25.** A5 (Ascend950PR) runs the in-process regbase pipeline inside"
+      echo "\`bishengir-compile\` and never invokes an external hivmc at runtime; the A3 path only calls \`hivmc --version\` for version"
+      echo "detection (looked up in \`\$BISHENG_INSTALL_PATH\`, then \`\$PATH\`; a miss is only a warning and can be overridden with"
+      echo "\`--hivmc-version\`). If your flow depends on \`hivmc-a5\`, use the 20260924 or earlier package."
     fi
     echo
-    echo "版本：$(sed -n '/^--- bishengir 版本 ---/,/^--- 产物 md5 ---/p' "$INFO" | sed -n '2p')"
+    echo "Version: $(sed -n '/^--- bishengir 版本 ---/,/^--- 产物 md5 ---/p' "$INFO" | sed -n '2p')"
     echo
-    echo "### 安装"
+    echo "### Install"
     echo
     echo '```bash'
     echo "pip install --no-deps --force-reinstall \\"
     echo "  https://github.com/$REPO/releases/download/$TAG/$(basename "$W")"
     echo '```'
     echo
-    echo "外部依赖自行确保：CANN toolkit、torch-npu（当前配套 2.7.1.post8）。"
+    echo "External dependencies to provide yourself: the CANN toolkit and torch-npu (currently paired with 2.7.1.post8)."
     if [ -n "$STUBBED" ] || [ -n "$MISSING_BC" ]; then
       echo
-      echo "### 已知问题（本次构建）"
+      echo "### Known issues (this build)"
       echo
       if [ -n "$STUBBED" ]; then
-        echo "NPUIR 设备调试模板（\`lib/{Debug,RegBase/Debug,RegBase/Debug/SIMT}/Debug.cpp\`）需要的宏 \`CCE_PRINT_CC\`"
-        echo "在 ${CANN:-所用 CANN} 的 ccec 里不存在 → 编译失败；本次对这 3 个源文件做了**空 TU 顶替**，"
-        echo "以便 \`meta_op.*.bc\` 能正常链接（设备调试打印相关符号为空，其余模板库完整）："
+        echo "The NPUIR device-debug templates (\`lib/{Debug,RegBase/Debug,RegBase/Debug/SIMT}/Debug.cpp\`) need the macro"
+        echo "\`CCE_PRINT_CC\`, which does not exist in the ccec of ${CANN:-the CANN in use} → compilation fails. For this build those"
+        echo "3 source files were **replaced by empty translation units** so that \`meta_op.*.bc\` can link (device debug print"
+        echo "symbols are empty; the remaining template libraries are complete):"
         echo
         echo '```'
         printf '%s\n' "$STUBBED" | tr ' ' '\n' | grep -v '^$'
         echo '```'
       fi
-      [ -n "$MISSING_BC" ] && echo "模板库缺失：$MISSING_BC"
+      [ -n "$MISSING_BC" ] && echo "Missing template libraries: $MISSING_BC"
     fi
   } > "$TMP/section-$V.md"
 done
