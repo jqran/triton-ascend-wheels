@@ -66,7 +66,7 @@ if [ "$VARIANT" = "all" ]; then
     echo "[$(date '+%F %T')] ========== 变体 $v =========="
     # stderr 追加进该变体自己的日志：bash 自身的报错（语法外的运行时错误、unbound variable 等）
     # 不走 log()，cron 又会把 stderr 丢进 /dev/null —— 2026-10-05 的崩溃就是这样无声无息的
-    "$0" "$v" 2>>"$LOGDIR/daily_${v}_$(date +%Y%m%d).log"
+    "$0" "$v" 2>>"${LOGDIR:-$W/logs}/daily_${v}_${STAMP:-$(date +%Y%m%d)}.log"
     vrc=$?
     [ "$vrc" -ne 0 ] && rc=1
     echo "[$(date '+%F %T')] ========== 变体 $v 结束（rc=$vrc） =========="
@@ -85,6 +85,12 @@ if [ "$VARIANT" = "all" ]; then
         *) continue ;;                         # SKIPPED_UNCHANGED / FAIL：别把上一版当本次产物重复发布
       esac
       d=$(printf '%s' "$line" | sed -n 's/.* out=\([^ ]*\).*/\1/p')
+      # 只发「本次运行当天」的产物目录：本轮失败时状态文件里仍是上一版的 out=，
+      # 不加这道过滤就会把昨天的包当成今天的重新发布一遍（2026-10-06 实测踩到）
+      case "$(basename "${d:-none}")" in
+        "${STAMP:-$(date +%Y%m%d)}"*) ;;
+        *) echo "[$(date '+%F %T')] 跳过非本日产物目录：${d:-无}（仅重发当天）"; continue ;;
+      esac
       if [ -n "$d" ] && [ -d "$d" ] && ls "$d"/*.whl >/dev/null 2>&1; then PDIRS+=("$d"); fi
     done
     if [ ${#PDIRS[@]} -gt 0 ]; then
@@ -153,8 +159,9 @@ fi
 case "$VARIANT" in
   dev)    ROOT=$W;        DEF_TA=main-dev; DEF_NP=master ;;   # dev 工作区沿用历史路径（~/ws_daily/{src,build,payload,state}），保留热构建缓存
   stable) ROOT=$W/stable; DEF_TA=main;     DEF_NP=stable ;;
-  --selftest) ROOT=$W; DEF_TA=main-dev; DEF_NP=master ;;      # 前置段自检（见下方 selftest 分支），不构建
-  *) echo "未知变体 '$VARIANT'（可选 dev / stable / all / --selftest）"; exit 2 ;;
+  --selftest)     ROOT=$W; DEF_TA=main-dev; DEF_NP=master ;;  # 前置段自检（见下方 selftest 分支），不构建
+  --selftest-all) ROOT=$W; DEF_TA=main-dev; DEF_NP=master ;;  # 包装路径自检：跑完整 all 包装，子进程只跑前置段
+  *) echo "未知变体 '$VARIANT'（可选 dev / stable / all / --selftest / --selftest-all）"; exit 2 ;;
 esac
 TA_BRANCH=${TA_BRANCH:-$DEF_TA}
 NP_BRANCH=${NP_BRANCH:-$DEF_NP}
@@ -251,7 +258,8 @@ gitnet() {
 # 调用时 command not found、紧接着 $GIT_NET_MODE 未绑定 → set -u 直接终止（rc=1），
 # 而 bash -n 查不出来、"source helper 单独测"也查不出来（没走真实脚本路径）。
 # 以后改完脚本，除了 bash -n，必须再跑一次：daily_build.sh --selftest
-if [ "$VARIANT" = "--selftest" ]; then
+if [ "$VARIANT" = "--selftest" ] || [ "${SELFTEST_CHILD:-0}" = "1" ]; then
+  SELFTEST_CHILD=1
   VARIANT=selftest
   LOG=$LOGDIR/daily_selftest_$STAMP.log
   log "=== 前置段自检（容器 + 网络探测，不构建）==="
@@ -259,8 +267,16 @@ if [ "$VARIANT" = "--selftest" ]; then
   probe_git_proxy
   log "源码获取网络模式：$GIT_NET_MODE"
   log "✅ 前置段自检通过（无未定义变量/未定义函数）"
+  [ "$SELFTEST_CHILD" = "1" ] && { echo "[selftest] 前置段 OK（SELFTEST_CHILD，跳过构建）"; exit 0; }
   echo "✅ 自检通过：GIT_NET_MODE=$GIT_NET_MODE"
   exit 0
+fi
+
+# ---- 包装路径自检（--selftest-all）：跑完整的 all 包装（子进程只跑前置段），用于验证
+#      看板/发布/rc 汇总这些"只在 all 分支里执行"的代码 —— 2026-10-06 的第二个 bug 就出在这里 ----
+if [ "$VARIANT" = "--selftest-all" ]; then
+  export SELFTEST_CHILD=1
+  exec "$0" all
 fi
 
 NPUIR_OK=1
