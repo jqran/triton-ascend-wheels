@@ -64,8 +64,12 @@ if [ "$VARIANT" = "all" ]; then
   export PUBLISH_DEFER
   for v in dev stable; do
     echo "[$(date '+%F %T')] ========== 变体 $v =========="
-    "$0" "$v" || rc=1
-    echo "[$(date '+%F %T')] ========== 变体 $v 结束（rc=$?） =========="
+    # stderr 追加进该变体自己的日志：bash 自身的报错（语法外的运行时错误、unbound variable 等）
+    # 不走 log()，cron 又会把 stderr 丢进 /dev/null —— 2026-10-05 的崩溃就是这样无声无息的
+    "$0" "$v" 2>>"$LOGDIR/daily_${v}_$(date +%Y%m%d).log"
+    vrc=$?
+    [ "$vrc" -ne 0 ] && rc=1
+    echo "[$(date '+%F %T')] ========== 变体 $v 结束（rc=$vrc） =========="
   done
 
   # ---- 发布：一个日期一条 release，把当天两条线的 wheel 一起发上去 ----
@@ -121,9 +125,14 @@ if [ "$VARIANT" = "all" ]; then
     0|2) ;;                                   # 2 = 未配凭据，属预期
     *) OV=FAIL; DET="$DET 发布失败(rc=$PUB_RC)" ;;
   esac
-  # 子变体退出码非 0 但状态文件没反映（例如被 kill / 崩溃，来不及写 last_run.txt）→ 也算失败
-  if [ "$rc" -ne 0 ] && [ "$OV" = OK ]; then OV=FAIL; DET="$DET 子变体退出码=$rc（状态文件可能没更新）"; fi
-  [ "$NRAN" -eq 0 ] && OV=SKIPPED_LOCK          # 一条都没真跑 → 单独一个 overall，不动提示
+  # 子变体退出码非 0 但状态文件没反映（例如被 kill / 崩溃 / 脚本报错，来不及写 last_run.txt）→ 也算失败
+  if [ "$rc" -ne 0 ] && [ "$OV" = OK ]; then OV=FAIL; DET="$DET 子变体退出码=$rc（状态文件没更新，疑似崩溃/脚本错误）"; fi
+  # 一条都没真跑：只有子进程全部 rc=0（典型：另一实例持锁，本轮让位）才是 SKIPPED_LOCK；
+  # rc≠0 说明是崩溃/脚本错误 → 保持 FAIL 并置 ATTENTION。
+  # ⚠️ 2026-10-05/06 两天就是因为这里被无条件覆盖成 SKIPPED_LOCK，失败被静默了（登录提示没亮）。
+  if [ "$NRAN" -eq 0 ]; then
+    if [ "$rc" -eq 0 ]; then OV=SKIPPED_LOCK; else OV=FAIL; DET="$DET（两条线都没写状态且子进程 rc=$rc）"; fi
+  fi
   [ -n "$DET" ] || DET="两条线都正常"
   CLEAR=0
   [ "$OV" = OK ] && [ "$NSKIP" -eq 0 ] && [ "$NOCLEAR" -eq 0 ] && CLEAR=1   # 都真跑成功才清提示
@@ -144,7 +153,8 @@ fi
 case "$VARIANT" in
   dev)    ROOT=$W;        DEF_TA=main-dev; DEF_NP=master ;;   # dev 工作区沿用历史路径（~/ws_daily/{src,build,payload,state}），保留热构建缓存
   stable) ROOT=$W/stable; DEF_TA=main;     DEF_NP=stable ;;
-  *) echo "未知变体 '$VARIANT'（可选 dev / stable / all）"; exit 2 ;;
+  --selftest) ROOT=$W; DEF_TA=main-dev; DEF_NP=master ;;      # 前置段自检（见下方 selftest 分支），不构建
+  *) echo "未知变体 '$VARIANT'（可选 dev / stable / all / --selftest）"; exit 2 ;;
 esac
 TA_BRANCH=${TA_BRANCH:-$DEF_TA}
 NP_BRANCH=${NP_BRANCH:-$DEF_NP}
@@ -201,29 +211,6 @@ ensure_container() {
   fi
 }
 
-NPUIR_OK=1
-TA_OK=1
-log "==================== ws_daily 开始（$VARIANT） ===================="
-log "TA=$TA_BRANCH  NPUIR=$NP_BRANCH  容器=$CONTAINER  -j $JOBS  保留 ${KEEP_DAYS}天/最少${KEEP_MIN}份"
-log "CANN=$CANN_ROOT  工作区=$ROOT"
-ensure_container
-probe_git_proxy
-log "源码获取网络模式：$GIT_NET_MODE"
-
-# ---------------------------------------------------------------- 1. 同步仓库
-# 首次运行（克隆）：dev 变体通常已有；stable 变体第一次会自动克隆
-bootstrap_repo() {  # bootstrap_repo <repo> <url> <branch> <name>
-  local repo=$1 url=$2 br=$3 name=$4
-  [ -d "$repo/.git" ] && return 0
-  log "[$name] 首次：克隆 $url ($br)"
-  for i in 1 2; do
-    rm -rf "$repo"
-    gitnet clone --branch "$br" --single-branch "$url" "$repo" >>"$LOG" 2>&1 && return 0
-    log "[$name] 克隆失败（第 $i 次，网络模式：$GIT_NET_MODE）"
-  done
-  log "[$name] ❌ 克隆失败（网络模式：$GIT_NET_MODE）"; return 1
-}
-
 # ---- 网络/代理策略（2026-09-30 事故）------------------------------------------------
 # 背景：`~/.gitconfig` 里配了 `http(s).proxy=http://127.0.0.1:7897`，那是**别的用户**在本机跑的
 #       代理进程；它一不在，git 就在 0 ms 内全部失败（"Couldn't connect to server"）→ 整晚不出包。
@@ -257,6 +244,46 @@ gitnet() {
     [ $i -lt 2 ] && sleep 5
   done
   return 1
+}
+
+# ---- 前置段自检（--selftest）：只跑「容器 + 网络探测」就退出，不构建 ----
+# 起因（2026-10-05/06 两次整晚静默失败）：probe_git_proxy 的定义被放在调用点之后，
+# 调用时 command not found、紧接着 $GIT_NET_MODE 未绑定 → set -u 直接终止（rc=1），
+# 而 bash -n 查不出来、"source helper 单独测"也查不出来（没走真实脚本路径）。
+# 以后改完脚本，除了 bash -n，必须再跑一次：daily_build.sh --selftest
+if [ "$VARIANT" = "--selftest" ]; then
+  VARIANT=selftest
+  LOG=$LOGDIR/daily_selftest_$STAMP.log
+  log "=== 前置段自检（容器 + 网络探测，不构建）==="
+  ensure_container
+  probe_git_proxy
+  log "源码获取网络模式：$GIT_NET_MODE"
+  log "✅ 前置段自检通过（无未定义变量/未定义函数）"
+  echo "✅ 自检通过：GIT_NET_MODE=$GIT_NET_MODE"
+  exit 0
+fi
+
+NPUIR_OK=1
+TA_OK=1
+log "==================== ws_daily 开始（$VARIANT） ===================="
+log "TA=$TA_BRANCH  NPUIR=$NP_BRANCH  容器=$CONTAINER  -j $JOBS  保留 ${KEEP_DAYS}天/最少${KEEP_MIN}份"
+log "CANN=$CANN_ROOT  工作区=$ROOT"
+ensure_container
+probe_git_proxy
+log "源码获取网络模式：$GIT_NET_MODE"
+
+# ---------------------------------------------------------------- 1. 同步仓库
+# 首次运行（克隆）：dev 变体通常已有；stable 变体第一次会自动克隆
+bootstrap_repo() {  # bootstrap_repo <repo> <url> <branch> <name>
+  local repo=$1 url=$2 br=$3 name=$4
+  [ -d "$repo/.git" ] && return 0
+  log "[$name] 首次：克隆 $url ($br)"
+  for i in 1 2; do
+    rm -rf "$repo"
+    gitnet clone --branch "$br" --single-branch "$url" "$repo" >>"$LOG" 2>&1 && return 0
+    log "[$name] 克隆失败（第 $i 次，网络模式：$GIT_NET_MODE）"
+  done
+  log "[$name] ❌ 克隆失败（网络模式：$GIT_NET_MODE）"; return 1
 }
 
 sync_repo() {
