@@ -152,6 +152,16 @@ for i in "${ORDER[@]}"; do
   BC_CNT=$(get 模板库条目)
   NPUIR_OK=1
   case "$(get 'AscendNPU-IR')" in *build_ok=0*) NPUIR_OK=0 ;; esac
+  # wheel 里有没有按优化级别的模板库（.O0/.O2；2026-10-10 起上游 MR!3967「support-O2-O0」提供）
+  HAS_OPT=$(python3 - "$W" <<'PY2'
+import sys, zipfile
+try:
+    z = zipfile.ZipFile(sys.argv[1])
+    print("yes" if any(n.endswith(".O2.bc") for n in z.namelist()) else "no")
+except Exception:
+    print("no")
+PY2
+)
   # wheel 里到底有没有 hivmc-a5（2026-09-25 起不再打包；说明按实际情况写，重发老包也不会写错）
   HAS_A5=$(python3 - "$W" <<'PY'
 import sys, zipfile
@@ -194,7 +204,11 @@ PY
     else
       echo "bin/{bishengir-compile, bishengir-opt, hivmc}"
     fi
-    echo "lib/{host.bc, meta_op.{aic,aiv,mix}.{c220,c310}.bc}   # $(printf '%s' "${BC_CNT:-9}" | grep -oE '[0-9]+' | head -1) files"
+    if [ "$HAS_OPT" = "yes" ]; then
+      echo "lib/host{,​.O0,.O2}.bc   lib/meta_op.{aic,aiv,mix}.{c220,c310}{,.O0,.O2}.bc   # $(printf '%s' "${BC_CNT:-27}" | grep -oE '[0-9]+' | head -1) files"
+    else
+      echo "lib/{host.bc, meta_op.{aic,aiv,mix}.{c220,c310}.bc}   # $(printf '%s' "${BC_CNT:-9}" | grep -oE '[0-9]+' | head -1) files"
+    fi
     echo '```'
     echo
     if [ "$HAS_A5" = "yes" ]; then
@@ -207,6 +221,13 @@ PY
       echo "\`--hivmc-version\`). If your flow depends on \`hivmc-a5\`, use the 20260924 or earlier package."
     fi
     echo
+    if [ "$HAS_OPT" = "yes" ]; then
+      echo "Note: since 2026-10-10 upstream AscendNPU-IR builds **per-optimization-level template bitcode**"
+      echo "(\`.O0\` / \`.O2\` variants next to the unsuffixed files, MR !3967 \"support-O2-O0\") and"
+      echo "\`bishengir-compile\` selects the variant by optimization level / CANN version at runtime — so all of them"
+      echo "ship inside the wheel. This is why the wheel is ~39 MB larger than builds before 2026-10-10."
+      echo
+    fi
     echo "Version: $(sed -n '/^--- bishengir 版本 ---/,/^--- 产物 md5 ---/p' "$INFO" | sed -n '2p')"
     echo
     echo "### Install"
