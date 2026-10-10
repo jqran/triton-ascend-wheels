@@ -12,6 +12,10 @@
 > 调用点（A5 走 `bishengir-compile` 内的 regbase 流水线，A3 只用 `hivmc --version` 做版本探测）。
 > **20260924 及更早的 release 里仍带 `hivmc-a5`（wheel 内 13 项），是正常的。**
 
+> 2026-10-10 起 wheel 大了约 39MB：上游 AscendNPU-IR 开始构建**按优化级别的模板库**（无后缀之外多出 `.O0` / `.O2` 两套，
+> MR !3967），`bishengir-compile` 运行期按优化级别 / CANN 版本挑选对应位码，所以三套都要随包发
+> （`lib/` 从 9 个 `.bc` 变成 27 个，payload 636MB → 755MB）。
+
 ## 构建方式
 
 | 项 | 值 |
@@ -55,7 +59,8 @@ python - <<'PY'
 import zipfile, glob
 z = zipfile.ZipFile(glob.glob("triton_ascend-*.whl")[0])
 n = [x for x in z.namelist() if "bishengir/" in x]
-print(len(n), "bishengir entries")   # 12（3 个 bin + 9 个 .bc）；20260924 及更早的包是 13（多一个 hivmc-a5）
+print(len(n), "bishengir entries")   # 20261010 起是 30（3 个 bin + 27 个 .bc：无后缀 + .O0/.O2 两套）
+                                     # 20260925–20261009 是 12（3 + 9）；20260924 及更早是 13（多一个 hivmc-a5）
 PY
 ```
 
