@@ -13,6 +13,11 @@ is installed, the toolchain comes with it — there is no separate bishengir dep
 > calls `hivmc --version` for version detection).
 > **Releases from 20260924 and earlier still ship `hivmc-a5` (13 entries inside the wheel) — that is expected.**
 
+> Since 2026-10-10 the wheels are ~39 MB larger: upstream AscendNPU-IR now builds **per-optimization-level template
+> bitcode** (`.O0` / `.O2` variants next to the unsuffixed files, MR !3967) and `bishengir-compile` selects the variant
+> by optimization level / CANN version at runtime, so all of them are shipped inside the wheel
+> (`lib/` went from 9 to 27 `.bc` files, payload 636 MB → 755 MB).
+
 ## How the builds are made
 
 | Item | Value |
@@ -57,7 +62,8 @@ python - <<'PY'
 import zipfile, glob
 z = zipfile.ZipFile(glob.glob("triton_ascend-*.whl")[0])
 n = [x for x in z.namelist() if "bishengir/" in x]
-print(len(n), "bishengir entries")   # 12 (3 binaries + 9 .bc); releases from 20260924 and earlier have 13 (one extra hivmc-a5)
+print(len(n), "bishengir entries")   # 30 since 20261010 (3 binaries + 27 .bc: unsuffixed plus .O0/.O2 variants)
+                                     # 12 between 20260925 and 20261009 (3 + 9 .bc); 20260924 and earlier: 13 (one extra hivmc-a5)
 PY
 ```
 
