@@ -253,6 +253,49 @@ gitnet() {
   return 1
 }
 
+# ---- LLVM 前置检查 ----
+# 官方口径（2026-10-23 查清）：TA 的 C++ 用「pin 的 LLVM + third_party/ascend/patch/llvm_patch_<pin>.patch」，
+# 补丁会往 MLIR 里补回 Bufferization_ToMemrefOp 等旧 API；缺补丁时上游只要用到旧名就编不过
+# （表现：dev 失败、stable 正常、日志里 "no member named 'ToMemrefOp' in namespace 'mlir::bufferization'"）
+check_llvm() {
+  local bc="$LLVM_PREBUILT/include/mlir/Dialect/Bufferization/IR/BufferizationOps.td"
+  local ver; ver=$("$LLVM_PREBUILT/bin/llvm-config" --version 2>/dev/null || echo "?")
+  if [ -f "$bc" ] && grep -q "def Bufferization_ToMemrefOp" "$bc"; then
+    log "LLVM: $LLVM_PREBUILT ($ver) 含 Ascend 补丁 ✓（ToMemrefOp 可用）"
+  else
+    log "⚠️ LLVM: $LLVM_PREBUILT ($ver) 缺 Ascend 补丁 ✗（无 Bufferization_ToMemrefOp）"
+    log "   → 上游代码若用旧 bufferization API 会编不过；官方口径是 pin + third_party/ascend/patch/llvm_patch_<pin>.patch"
+  fi
+}
+
+# ---- 本地兼容修补：LLVM 未打 Ascend 补丁时，把 third_party/ascend 里的旧 bufferization API 名改回新名 ----
+# 背景（2026-10-23 查清）：官方 LLVM = pin + third_party/ascend/patch/llvm_patch_<pin>.patch（补回 ToMemrefOp）；
+# 我们的 LLVM 是未打补丁的（只有 ToBufferOp）。上游 #2707 把代码改回旧 API 名后 dev 就编不过。
+# 该修补等价于用回 #2707 之前的代码（那时 nightly 正常出包）；LLVM 换成官方补丁版后这里自动不生效。
+fixup_bufferization_api() {
+  local root="$ROOT/src/triton-ascend" files
+  # 只改 TA 仓**已跟踪**的源码（用 git grep，避免把 build/ 下的副本算进来）；
+  # 并**排除子模块** AscendNPU-IR（NPUIR 在容器里用它自己的 LLVM 编，不能动）
+  files=$(git -C "$root" grep -l "bufferization::ToMemrefOp" -- '*.cc' '*.cpp' '*.h' '*.hpp' \
+            ':!third_party/ascend/AscendNPU-IR' 2>/dev/null || true)
+  [ -z "$files" ] && return 0
+  if grep -q "def Bufferization_ToMemrefOp" "$LLVM_PREBUILT/include/mlir/Dialect/Bufferization/IR/BufferizationOps.td" 2>/dev/null; then
+    return 0      # LLVM 有官方补丁 → 源码不需要改
+  fi
+  log "⚠️ 本地兼容修补：把 $(printf '%s\n' "$files" | wc -l) 个文件里的 bufferization::ToMemrefOp → ToBufferOp"
+  log "   （原因：本机 LLVM 未打 third_party/ascend/patch/llvm_patch_<pin>.patch；等价于上游 #2707 之前的代码）"
+  printf '%s\n' "$files" | sed "s|^|$root/|" | xargs -r sed -i 's/bufferization::ToMemrefOp/bufferization::ToBufferOp/g'
+  # ⚠️ 关键补充：构建期 third_party/ascend/build/setup_patch.py 会 checkout 一批文件再 apply
+  # third_party/ascend/patch/triton-ascend-3.6.0.patch —— 那个 patch 里有一处把 buffer_ir.cc 的
+  # ToBufferOp 改回 ToMemrefOp，所以只改工作区文件会被覆盖；这里连 patch 文件一起改（增删行数不变，仍可 apply）。
+  local pfiles pf
+  pfiles=$(grep -rl "bufferization::ToMemrefOp" "$root/third_party/ascend/patch" --include=*.patch 2>/dev/null || true)
+  if [ -n "$pfiles" ]; then
+    log "⚠️ 同步修补 patch 文件（共 $(printf '%s\n' "$pfiles" | wc -l) 个；否则构建期会被重新覆盖）"
+    printf '%s\n' "$pfiles" | xargs -r sed -i 's/bufferization::ToMemrefOp/bufferization::ToBufferOp/g'
+  fi
+}
+
 # ---- 前置段自检（--selftest）：只跑「容器 + 网络探测」就退出，不构建 ----
 # 起因（2026-10-05/06 两次整晚静默失败）：probe_git_proxy 的定义被放在调用点之后，
 # 调用时 command not found、紧接着 $GIT_NET_MODE 未绑定 → set -u 直接终止（rc=1），
@@ -262,10 +305,12 @@ if [ "$VARIANT" = "--selftest" ] || [ "${SELFTEST_CHILD:-0}" = "1" ]; then
   SELFTEST_CHILD=1
   VARIANT=selftest
   LOG=$LOGDIR/daily_selftest_$STAMP.log
-  log "=== 前置段自检（容器 + 网络探测，不构建）==="
+  log "=== 前置段自检（容器 + 网络探测 + LLVM，不构建）==="
   ensure_container
   probe_git_proxy
+  check_llvm
   log "源码获取网络模式：$GIT_NET_MODE"
+  check_llvm
   log "✅ 前置段自检通过（无未定义变量/未定义函数）"
   [ "$SELFTEST_CHILD" = "1" ] && { echo "[selftest] 前置段 OK（SELFTEST_CHILD，跳过构建）"; exit 0; }
   echo "✅ 自检通过：GIT_NET_MODE=$GIT_NET_MODE"
@@ -501,6 +546,7 @@ if [ "${TA_SYNC:-0}" -eq 1 ]; then
   VERDATE=$(printf '%s' "$STAMP" | tr -cd '0-9' | cut -c1-8)
   [ ${#VERDATE} -eq 8 ] || VERDATE=$(date +%Y%m%d)
   if grep -qi dev "$TA_REPO/version.txt" 2>/dev/null; then VSFX="$VERDATE"; else VSFX=".post$VERDATE"; fi
+  fixup_bufferization_api
   log "[TA] 构建 wheel（入口 $ENTRY，bishengir 注入=$([ $NPUIR_OK -eq 1 ] && echo 是 || echo 否)，版本后缀=${VSFX}，基础版本=$(cat "$TA_REPO/version.txt" 2>/dev/null)）"
   TA_CMD="source $CANN_ENV >/dev/null 2>&1; cd $TA_REPO && export PATH=$PY311:\$PATH LLVM_SYSPATH=$LLVM_PREBUILT \
 TRITON_WHEEL_VERSION_SUFFIX='$VSFX' \
