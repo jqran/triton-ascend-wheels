@@ -341,6 +341,7 @@ log "CANN=$CANN_ROOT  工作区=$ROOT"
 ensure_container
 probe_git_proxy
 log "源码获取网络模式：$GIT_NET_MODE"
+check_llvm
 
 # ---------------------------------------------------------------- 1. 同步仓库
 # 首次运行（克隆）：dev 变体通常已有；stable 变体第一次会自动克隆
