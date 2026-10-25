@@ -178,6 +178,15 @@ CONTAINER_USER=${CONTAINER_USER:-$(id -un)}   # 容器内以当前用户执行
 JOBS=${JOBS:-64}
 KEEP_DAYS=${KEEP_DAYS:-14}
 KEEP_MIN=${KEEP_MIN:-3}
+# LLVM 选择：优先"容器内用 pin + third_party/ascend/patch/llvm_patch_<pin>.patch 重建"的那套
+# （GitHub 官方 CI 就是这个口径：补丁会补回 Bufferization_ToMemrefOp，并把 ToTensorOp 的 printer
+#  改成 bishengir 能吃的短形式 `: memref<...>`；缺这两点时 dev 编不过 / kernel 在 bishengir 解析失败）。
+# 没有重建版就退回旧的未打补丁版（仍能用，但会有上述兼容问题，check_llvm 会告警）。
+if [ -z "${LLVM_PREBUILT:-}" ]; then
+  for _cand in "$HOME/workspace/llvm-f6ded0b-ascend" "$HOME/workspace/llvm"; do
+    [ -x "$_cand/bin/llvm-config" ] && { LLVM_PREBUILT=$_cand; break; }
+  done
+fi
 LLVM_PREBUILT=${LLVM_PREBUILT:-$HOME/workspace/llvm}
 CANN_ROOT=${CANN_ROOT:-$(readlink -f "$HOME/Ascend/cann")}   # 安装器维护的软链；2026-09-22 起 -> cann-9.3.0
 CANN_ENV=${CANN_ENV:-$CANN_ROOT/set_env.sh}
