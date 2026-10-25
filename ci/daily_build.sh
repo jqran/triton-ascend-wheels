@@ -20,6 +20,8 @@
 #   手动跑：~/ws_daily/daily_build.sh stable        （或 dev / all）
 #   日志：  ~/ws_daily/logs/daily_<variant>_<日期>.log（发布日志 logs/publish_<日期>.log）
 #   开关： JOBS=64 FORCE=1 PUBLISH=0 KEEP_DAYS=14 KEEP_MIN=3 KEEP_PER_VARIANT=1
+#   补跑特定 commit：STAMP=20261022 TA_COMMIT=<sha> NP_COMMIT=<sha> FORCE=1 PUBLISH=0 ./daily_build.sh dev
+#     （STAMP 决定版本号与产物目录日期；两个 *_COMMIT 不设时行为不变，仍跟分支 tip）
 # =============================================================================
 set -uo pipefail
 
@@ -358,10 +360,29 @@ bootstrap_repo() {  # bootstrap_repo <repo> <url> <branch> <name>
 }
 
 sync_repo() {
-  local repo=$1 br=$2 name=$3 ok=0
+  local repo=$1 br=$2 name=$3 pin=${4:-} ok=0
   log "[$name] fetch origin/$br（网络模式：$GIT_NET_MODE）"
   if gitnet -C "$repo" fetch --prune origin "$br" >>"$LOG" 2>&1; then ok=1; fi
+  if [ $ok -ne 1 ] && [ -n "$pin" ] && git -C "$repo" cat-file -e "${pin}^{commit}" 2>/dev/null; then
+    # 补跑模式：指定 commit 本地已有 → 网络抖动不阻断（fetch 只是顺带更新分支引用）
+    log "[$name] ⚠️ fetch 失败，但指定 commit ${pin:0:8} 本地已存在 → 继续"
+    ok=1
+  fi
   [ $ok -eq 1 ] || { log "[$name] ❌ fetch 连续失败（网络模式：$GIT_NET_MODE）"; return 1; }
+  if [ -n "$pin" ]; then
+    # 指定 commit（补跑/回溯专用）：detached checkout 到该 commit，不再跟分支 tip
+    git -C "$repo" cat-file -e "${pin}^{commit}" 2>/dev/null \
+      || gitnet -C "$repo" fetch --prune origin "$pin" >>"$LOG" 2>&1 || true
+    if ! git -C "$repo" cat-file -e "${pin}^{commit}" 2>/dev/null; then
+      log "[$name] ❌ 指定 commit ${pin:0:8} 在本地与 origin 都取不到"; return 1
+    fi
+    git -C "$repo" checkout -f --detach "$pin" >>"$LOG" 2>&1 || { log "[$name] ❌ checkout ${pin:0:8} 失败"; return 1; }
+    git -C "$repo" reset --hard "$pin" >>"$LOG" 2>&1
+    git -C "$repo" clean -fd >>"$LOG" 2>&1
+    local n2; n2=$(git -C "$repo" status --porcelain | wc -l)
+    log "[$name] HEAD=$(git -C "$repo" rev-parse --short=8 HEAD)（指定 commit ${pin:0:8}）本地改动/未跟踪=$n2"
+    return 0
+  fi
   git -C "$repo" checkout -f -B "$br" "origin/$br" >>"$LOG" 2>&1 || { log "[$name] ❌ checkout 失败"; return 1; }
   git -C "$repo" reset --hard "origin/$br" >>"$LOG" 2>&1
   git -C "$repo" clean -fd >>"$LOG" 2>&1          # 丢未跟踪文件；.gitignore 的构建产物保留→增量编译
@@ -412,8 +433,8 @@ update_submodules() {
 TA_SYNC=0; NP_SYNC=0
 bootstrap_repo "$TA_REPO" https://github.com/triton-lang/triton-ascend.git "$TA_BRANCH" "triton-ascend"
 bootstrap_repo "$NP_REPO" https://gitcode.com/Ascend/AscendNPU-IR.git "$NP_BRANCH" "AscendNPU-IR"
-[ -d "$TA_REPO/.git" ] && sync_repo "$TA_REPO" "$TA_BRANCH" "triton-ascend" && TA_SYNC=1
-[ -d "$NP_REPO/.git" ] && sync_repo "$NP_REPO" "$NP_BRANCH" "AscendNPU-IR" && NP_SYNC=1
+[ -d "$TA_REPO/.git" ] && sync_repo "$TA_REPO" "$TA_BRANCH" "triton-ascend" "${TA_COMMIT:-}" && TA_SYNC=1
+[ -d "$NP_REPO/.git" ] && sync_repo "$NP_REPO" "$NP_BRANCH" "AscendNPU-IR" "${NP_COMMIT:-}" && NP_SYNC=1
 [ "$NP_SYNC" -eq 1 ] && update_submodules "$NP_REPO" "AscendNPU-IR"
 [ "$TA_SYNC" -eq 1 ] && update_submodules "$TA_REPO" "triton-ascend"
 
