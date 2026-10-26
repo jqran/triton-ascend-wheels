@@ -251,13 +251,15 @@ probe_git_proxy() {
 # 带兜底的 git 调用：先按探测结论，失败再换另一种模式（每种最多 2 次）
 gitnet() {
   local i
+  # 单次尝试最多卡 30 秒（github 直连常见"连上但不回包"，实测能空转 130+ 秒）
+  local T=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30)
   for i in 1 2; do
     if [ ${#PROXY_OPTS[@]} -eq 0 ]; then
-      git "${PROXY_OPTS[@]}" "$@" && return 0
-      git -c http.proxy= -c https.proxy= "$@" && { GIT_NET_MODE="$GIT_NET_MODE（直连兜底成功）"; return 0; }
+      git "${T[@]}" "${PROXY_OPTS[@]}" "$@" && return 0
+      git "${T[@]}" -c http.proxy= -c https.proxy= "$@" && { GIT_NET_MODE="$GIT_NET_MODE（直连兜底成功）"; return 0; }
     else
-      git "${PROXY_OPTS[@]}" "$@" && return 0
-      git "$@" && { GIT_NET_MODE="$GIT_NET_MODE（代理兜底成功）"; return 0; }
+      git "${T[@]}" "${PROXY_OPTS[@]}" "$@" && return 0
+      git "${T[@]}" "$@" && { GIT_NET_MODE="$GIT_NET_MODE（代理兜底成功）"; return 0; }
     fi
     [ $i -lt 2 ] && sleep 5
   done
@@ -335,6 +337,8 @@ if [ "$VARIANT" = "--selftest-all" ]; then
   exec "$0" all
 fi
 
+FETCH_DEGRADED=""      # fetch 降级用本地引用的仓库名（记进日志与 BUILD_INFO）
+
 NPUIR_OK=1
 TA_OK=1
 log "==================== ws_daily 开始（$VARIANT） ===================="
@@ -366,6 +370,13 @@ sync_repo() {
   if [ $ok -ne 1 ] && [ -n "$pin" ] && git -C "$repo" cat-file -e "${pin}^{commit}" 2>/dev/null; then
     # 补跑模式：指定 commit 本地已有 → 网络抖动不阻断（fetch 只是顺带更新分支引用）
     log "[$name] ⚠️ fetch 失败，但指定 commit ${pin:0:8} 本地已存在 → 继续"
+    ok=1
+  fi
+  if [ $ok -ne 1 ] && git -C "$repo" rev-parse -q --verify "refs/remotes/origin/$br" >/dev/null 2>&1; then
+    # 兜底：fetch 失败但本地有 origin/<branch> 引用 → 用本地（可能略旧）继续，别让整晚白跑
+    # 2026-10-26 事故：github 直连抖动 → dev 整晚没出包；之后每天都会遇到，故加此降级
+    log "[$name] ⚠️ fetch 失败 → 退回本地已有的 origin/$br（$(git -C "$repo" rev-parse --short=8 "origin/$br")），可能不是最新 tip"
+    FETCH_DEGRADED="$FETCH_DEGRADED $name"
     ok=1
   fi
   [ $ok -eq 1 ] || { log "[$name] ❌ fetch 连续失败（网络模式：$GIT_NET_MODE）"; return 1; }
@@ -618,6 +629,7 @@ PY
     echo "date: $(date '+%F %T %Z')"
     echo "variant: $VARIANT (triton-ascend $TA_BRANCH + AscendNPU-IR $NP_BRANCH)"
     echo "triton-ascend: branch=$TA_BRANCH commit=$(git -C "$TA_REPO" rev-parse HEAD)"
+    [ -n "${FETCH_DEGRADED:-}" ] && echo "⚠️ 源码获取降级：$FETCH_DEGRADED 的 fetch 失败，用了本地已有的 origin 引用（可能不是最新 tip）"
     echo "AscendNPU-IR:  branch=$NP_BRANCH commit=$(git -C "$NP_REPO" rev-parse HEAD 2>/dev/null) (build_ok=$NPUIR_OK)"
     echo "wheel: $(basename "$WHL")  size=$(du -h "$WHL" | cut -f1)"
     echo "源码获取网络: ${GIT_NET_MODE:-未探测}"
