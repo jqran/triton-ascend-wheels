@@ -10,8 +10,10 @@
 # =============================================================================
 set -u
 W=${WS_DAILY_ROOT:-$HOME/ws_daily}
-A=$W/state/ATTENTION
-[ -e "$A" ] || exit 0          # 没问题 → 静默
+A=$W/state/ATTENTION              # 构建失败（daily_build.sh 写）
+AS=$W/state/ATTENTION.sync        # a5 同步异常（a5_sync_service.py 写；独立文件，互不覆盖）
+SH=$W/state/sync_health.txt
+[ -e "$A" ] || [ -e "$AS" ] || exit 0          # 两类都没有 → 静默
 
 H=$W/state/health.txt
 if [ -t 1 ]; then R=$'\033[1;31m'; Y=$'\033[1;33m'; B=$'\033[1m'; N=$'\033[0m'; else R=; Y=; B=; N=; fi
@@ -29,11 +31,21 @@ PUB_LAST=$(ls -t "$W"/logs/publish_*.log 2>/dev/null | head -1)
 
 echo
 echo "${R}${B}╔════════════════════════════════════════════════════════════════════════╗${N}"
-echo "${R}${B}║   ⚠️   ws_daily 每日构建：上一轮有问题，请看一眼                     ║${N}"
+echo "${R}${B}║   ⚠️   ws_daily：构建或 a5 同步有问题，请看一眼                       ║${N}"
 echo "${R}${B}╚════════════════════════════════════════════════════════════════════════╝${N}"
-printf '  %s%s%s\n' "$Y" "$(cat "$A" 2>/dev/null)" "$N"
-if [ -f "$H" ]; then
-  while IFS= read -r l; do printf '    %s\n' "$l"; done < "$H"
+if [ -e "$A" ]; then
+  echo "  ${B}【构建】${N}"
+  printf '  %s%s%s\n' "$Y" "$(cat "$A" 2>/dev/null)" "$N"
+  if [ -f "$H" ]; then
+    while IFS= read -r l; do printf '    %s\n' "$l"; done < "$H"
+  fi
+fi
+if [ -e "$AS" ]; then
+  echo "  ${B}【a5 同步】${N}"
+  printf '  %s%s%s\n' "$Y" "$(cat "$AS" 2>/dev/null)" "$N"
+  if [ -f "$SH" ]; then
+    while IFS= read -r l; do printf '    %s\n' "$l"; done < "$SH"
+  fi
 fi
 echo "  ${B}快速动作${N}"
 if [ -n "$FAIL_LOGS" ]; then
@@ -46,6 +58,7 @@ if [ -n "${PUB_LAST:-}" ]; then
 else
   echo "    发布日志   : （本轮没跑发布）"
 fi
+echo "    同步日志   : tail -n 30 $W/logs/a5_sync_cron.log"
 echo "    产物索引   : cat $W/out/INDEX.md"
 echo "    变体状态   : cat $W/{state,stable/state}/last_run.txt"
 echo "    消除本提示 : $W/ack_last_failure.sh"
