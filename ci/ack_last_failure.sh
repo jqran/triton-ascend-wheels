@@ -6,14 +6,20 @@
 # =============================================================================
 set -u
 W=${WS_DAILY_ROOT:-$HOME/ws_daily}
-A=$W/state/ATTENTION
-if [ ! -e "$A" ]; then
-  echo "没有待确认的构建失败提示（$A 不存在）"
+A=$W/state/ATTENTION              # 构建失败
+AS=$W/state/ATTENTION.sync        # a5 同步异常
+if [ ! -e "$A" ] && [ ! -e "$AS" ]; then
+  echo "没有待确认的提示（$A、$AS 都不存在）"
   exit 0
 fi
-{
-  echo "acked: $(date '+%F %T') by $(id -un)@$(hostname)"
-  sed 's/^/acked-content: /' "$A"
-} >> "$W/state/health.txt"
-rm -f "$A"
-echo "✅ 已消除登录提示；历史记录保留在 $W/state/health.txt"
+n=0
+for f in "$A" "$AS"; do
+  [ -e "$f" ] || continue
+  {
+    echo "acked: $(date '+%F %T') by $(id -un)@$(hostname) ($(basename "$f"))"
+    sed 's/^/acked-content: /' "$f"
+  } >> "$W/state/health.txt"
+  rm -f "$f"
+  n=$((n + 1))
+done
+echo "✅ 已消除登录提示（$n 类）；历史记录保留在 $W/state/health.txt"
