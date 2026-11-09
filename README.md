@@ -95,6 +95,12 @@ gh release download 20260930 --repo jqran/triton-ascend-wheels --pattern '*.dev*
 gh release download 20260930 --repo jqran/triton-ascend-wheels --pattern '*.post*.whl'   # stable (older wheels have no 'post'; drop --pattern to get everything)
 ```
 
+## Known issues & missing dates
+
+Some days have no release at all (build machine offline, transient failures) and some earlier days produced only one of
+the two product lines; a few older wheels also carry known defects. All of it is documented per date in
+**[RELEASE_LOG.md](RELEASE_LOG.md)** — please check it before using an older wheel.
+
 ## Build scripts
 
 The wheels in this repository are produced by the scripts in `ci/`, which you can reuse directly:
