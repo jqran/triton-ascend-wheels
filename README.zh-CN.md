@@ -90,6 +90,11 @@ gh release download 20260930 --repo jqran/triton-ascend-wheels --pattern '*.dev*
 gh release download 20260930 --repo jqran/triton-ascend-wheels --pattern '*.post*.whl'   # stable（旧包无 post，或直接不加 --pattern 全下）
 ```
 
+## 缺日期与已知问题
+
+有些日期完全没有 release（构建机离线、临时故障），有些早期日期只出了一条线，少数老 wheel 还带已知缺陷。
+这些都在 **[RELEASE_LOG.zh-CN.md](RELEASE_LOG.zh-CN.md)** 里按日期逐条记录 —— 用老包之前请先看一眼。
+
 ## 构建脚本
 
 本仓库的包由 `ci/` 里的脚本自动产出，可直接复用：
