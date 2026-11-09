@@ -175,6 +175,7 @@ STATE=$ROOT/state
 OUT=$W/out
 LOGDIR=$W/logs
 
+USE_CONTAINER=${USE_CONTAINER:-0}   # 2026-11-06 起默认在 x86 宿主机直接编（docker.sock 已变 root:root 0600，普通账户不可用）
 CONTAINER=${CONTAINER:-ubuntu20}
 CONTAINER_USER=${CONTAINER_USER:-$(id -un)}   # 容器内以当前用户执行
 JOBS=${JOBS:-64}
@@ -190,7 +191,14 @@ if [ -z "${LLVM_PREBUILT:-}" ]; then
   done
 fi
 LLVM_PREBUILT=${LLVM_PREBUILT:-$HOME/workspace/llvm}
-CANN_ROOT=${CANN_ROOT:-$(readlink -f "$HOME/Ascend/cann")}   # 安装器维护的软链；2026-09-22 起 -> cann-9.3.0
+# stable 线的 AscendNPU-IR(stable 分支) 与 2026-11-04 版 CANN 不兼容：
+#   BishengLlcBridge.cpp 用到的 BISHENG_LLC_OK / _BAD_STATE / _AUX_ERROR / _IO_ERROR 在新 bisheng/ccec 头里已改，
+#   编 hivmc 时直接报 undeclared identifier（dev 的 NPUIR 11-09 已适配，无此问题）。
+# 因此 stable 默认钉到旧 CANN（2026-09-22 装的 cann-9.3.0）；等上游 stable 分支跟进后可删掉这段。
+if [ "${VARIANT:-}" = "stable" ] && [ -z "${CANN_ROOT:-}" ] && [ -d "$HOME/Ascend/cann-9.3.0" ]; then
+  CANN_ROOT=$HOME/Ascend/cann-9.3.0
+fi
+CANN_ROOT=${CANN_ROOT:-$(readlink -f "$HOME/Ascend/cann")}   # 安装器维护的软链；2026-11-09 起 -> Ascend-20261104/cann-9.3.0
 CANN_ENV=${CANN_ENV:-$CANN_ROOT/set_env.sh}
 CANN_BISHENG=${CANN_BISHENG:-$CANN_ROOT/tools/bisheng_compiler/bin}
 LLVM_SEED=${LLVM_SEED:-$HOME/workspace/AscendNPU-IR/third-party/llvm-project}
@@ -206,11 +214,21 @@ exec 9>"$STATE/lock"
 flock -n 9 || { echo "[$(date '+%F %T')] [$VARIANT] 已有实例在运行，本轮跳过"; exit 0; }
 
 log() { echo "[$(date '+%F %T')] [$VARIANT] $*" | tee -a "$LOG"; }
-in_container() { docker exec -u "$CONTAINER_USER" "$CONTAINER" nice -n 10 bash -lc "$1"; }
+in_container() {
+  if [ "${USE_CONTAINER:-0}" = "1" ]; then
+    docker exec -u "$CONTAINER_USER" "$CONTAINER" nice -n 10 bash -lc "$1"
+  else
+    nice -n 10 bash -lc "$1"      # 宿主机模式（默认）
+  fi
+}
 : > "$STATE/stubbed_srcs.txt"
 
 # 容器兜底：distrobox 容器重启策略是 no，机器重启后不一定在跑
 ensure_container() {
+  if [ "${USE_CONTAINER:-0}" != "1" ]; then
+    log "宿主机模式（USE_CONTAINER=0）：跳过容器检查"
+    return 0
+  fi
   if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"; then
     log "容器 $CONTAINER 未运行 → 尝试 docker start"
     docker start "$CONTAINER" >>"$LOG" 2>&1 || log "⚠️ docker start 失败（重启后若用户会话未建立，挂载点可能缺失）"
@@ -342,7 +360,7 @@ FETCH_DEGRADED=""      # fetch 降级用本地引用的仓库名（记进日志�
 NPUIR_OK=1
 TA_OK=1
 log "==================== ws_daily 开始（$VARIANT） ===================="
-log "TA=$TA_BRANCH  NPUIR=$NP_BRANCH  容器=$CONTAINER  -j $JOBS  保留 ${KEEP_DAYS}天/最少${KEEP_MIN}份"
+log "TA=$TA_BRANCH  NPUIR=$NP_BRANCH  执行=$([ "${USE_CONTAINER:-0}" = "1" ] && echo "容器:$CONTAINER" || echo "宿主机")  -j $JOBS  保留 ${KEEP_DAYS}天/最少${KEEP_MIN}份"
 log "CANN=$CANN_ROOT  工作区=$ROOT"
 ensure_container
 probe_git_proxy
@@ -590,7 +608,8 @@ if [ "${TA_SYNC:-0}" -eq 1 ]; then
   if grep -qi dev "$TA_REPO/version.txt" 2>/dev/null; then VSFX="$VERDATE"; else VSFX=".post$VERDATE"; fi
   fixup_bufferization_api
   log "[TA] 构建 wheel（入口 $ENTRY，bishengir 注入=$([ $NPUIR_OK -eq 1 ] && echo 是 || echo 否)，版本后缀=${VSFX}，基础版本=$(cat "$TA_REPO/version.txt" 2>/dev/null)）"
-  TA_CMD="source $CANN_ENV >/dev/null 2>&1; cd $TA_REPO && export PATH=$PY311:\$PATH LLVM_SYSPATH=$LLVM_PREBUILT \
+  # ~/.local/bin 前置：真 ccache 4.14.3 装在那里（Triton 构建走 TRITON_BUILD_WITH_CCACHE=true，从 PATH 取 ccache）
+  TA_CMD="source $CANN_ENV >/dev/null 2>&1; cd $TA_REPO && export PATH=$PY311:$HOME/.local/bin:\$PATH LLVM_SYSPATH=$LLVM_PREBUILT \
 TRITON_WHEEL_VERSION_SUFFIX='$VSFX' \
 TRITON_BUILD_WITH_CCACHE=true TRITON_BUILD_WITH_CLANG_LLD=true TRITON_BUILD_PROTON=OFF \
 TRITON_APPEND_CMAKE_ARGS='-DTRITON_BUILD_UT=OFF'; $BISH python $ENTRY bdist_wheel"
