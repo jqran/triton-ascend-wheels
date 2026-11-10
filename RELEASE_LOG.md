@@ -6,7 +6,7 @@ Every release here is **one day of automated builds**. This file records the day
 produced one of the two product lines, and the known defects of earlier wheels — so that nobody picks up an old wheel
 without knowing what is in it.
 
-*Last updated: 2026-11-09*
+*Last updated: 2026-11-10*
 
 ---
 
@@ -19,6 +19,7 @@ without knowing what is in it.
 | 2026-10-19 | ❌ no release | not produced |
 | 2026-11-02 | ❌ no release | not produced |
 | 2026-11-07 – 2026-11-08 | ❌ no release | the build container became unusable for the build account (container runtime permissions changed), and the nightly job still required it → aborted. Fixed 2026-11-09 by moving the build to the host (no container). |
+| 2026-11-10 | ✅ dev + stable | recovered — both lines had aborted with `cmake --build` **exit 127** because a toolchain path baked into the build cache had gone stale after the ccache binary was relocated. The nightly now detects and rewrites such stale paths before building. Both wheels were smoke-tested (`max|diff| = 0.0`) |
 | 2026-11-09 | ✅ dev + stable | recovered; see the CANN note in §2 |
 | 2026-10-22 / 2026-10-23 / 2026-10-24 | ⚠️ stable only | dev failed to compile: `third_party/ascend/lib` still used the old API name `mlir::bufferization::ToMemrefOp`, while the prebuilt LLVM had not been built with the Ascend patch. The dev assets were removed from those releases (2026-10-23 also had a duplicate stable asset, now removed). |
 | 2026-09-26 / 2026-09-27 / 2026-09-28 | ⚠️ dev only | the stable line was **skipped on purpose**: both components were unchanged (triton-ascend `main` @ `e3707df2`, AscendNPU-IR `stable` @ `693abf31`), so there was nothing new to build. The dev line rebuilt every day because AscendNPU-IR `master` moved. |
