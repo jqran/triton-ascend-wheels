@@ -303,6 +303,33 @@ check_llvm() {
 # 背景（2026-10-23 查清）：官方 LLVM = pin + third_party/ascend/patch/llvm_patch_<pin>.patch（补回 ToMemrefOp）；
 # 我们的 LLVM 是未打补丁的（只有 ToBufferOp）。上游 #2707 把代码改回旧 API 名后 dev 就编不过。
 # 该修补等价于用回 #2707 之前的代码（那时 nightly 正常出包）；LLVM 换成官方补丁版后这里自动不生效。
+# ---- ccache 路径自愈 ----
+# Triton / NPUIR 的 CMake 会把 `which ccache` 的**绝对路径**写进 CMakeCache.txt 和 build.ninja；
+# 之后 ccache 一挪位置（2026-11-09 从 ~/bin 挪到 ~/.local/bin），cmake --build 就直接 exit 127（找不到工具）。
+# 构建前扫一遍已知 build 目录，把**已失效**的 ccache 路径替换成当前可用的那个。
+fixup_stale_ccache() {
+  local cc cur f fixed=0
+  cc=$(command -v ccache 2>/dev/null || true)
+  if [ -z "$cc" ]; then
+    for c in "$HOME/.local/bin/ccache" "$HOME/bin/ccache"; do
+      [ -x "$c" ] && { cc=$c; break; }
+    done
+  fi
+  [ -n "$cc" ] || { log "[ccache] ⚠️ 找不到 ccache，跳过自愈"; return 0; }
+  for f in "$TA_REPO"/build/cmake.*/CMakeCache.txt "$TA_REPO"/build/cmake.*/build.ninja \
+           "$NP_BUILD"/CMakeCache.txt "$NP_BUILD"/build.ninja; do
+    [ -f "$f" ] || continue
+    for cur in $(grep -ohE '/[^ "]*/ccache' "$f" 2>/dev/null | sort -u); do
+      [ -x "$cur" ] && continue
+      sed -i "s|$cur|$cc|g" "$f" 2>/dev/null && {
+        log "[ccache] 修正失效路径：$cur → $cc（${f#$ROOT/}）"
+        fixed=1
+      }
+    done
+  done
+  [ "$fixed" = 1 ] || log "[ccache] 路径自检通过（$cc）"
+}
+
 fixup_bufferization_api() {
   local root="$ROOT/src/triton-ascend" files
   # 只改 TA 仓**已跟踪**的源码（用 git grep，避免把 build/ 下的副本算进来）；
@@ -366,6 +393,7 @@ ensure_container
 probe_git_proxy
 log "源码获取网络模式：$GIT_NET_MODE"
 check_llvm
+fixup_stale_ccache
 
 # ---------------------------------------------------------------- 1. 同步仓库
 # 首次运行（克隆）：dev 变体通常已有；stable 变体第一次会自动克隆
