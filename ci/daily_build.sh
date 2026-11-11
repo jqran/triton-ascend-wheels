@@ -637,7 +637,7 @@ if [ "${TA_SYNC:-0}" -eq 1 ]; then
   fixup_bufferization_api
   log "[TA] 构建 wheel（入口 $ENTRY，bishengir 注入=$([ $NPUIR_OK -eq 1 ] && echo 是 || echo 否)，版本后缀=${VSFX}，基础版本=$(cat "$TA_REPO/version.txt" 2>/dev/null)）"
   # ~/.local/bin 前置：真 ccache 4.14.3 装在那里（Triton 构建走 TRITON_BUILD_WITH_CCACHE=true，从 PATH 取 ccache）
-  TA_CMD="source $CANN_ENV >/dev/null 2>&1; cd $TA_REPO && export PATH=$PY311:$HOME/.local/bin:\$PATH LLVM_SYSPATH=$LLVM_PREBUILT \
+  TA_CMD="source $CANN_ENV >/dev/null 2>&1; cd $TA_REPO && export PATH=$PY311:$HOME/.local/bin:\$PATH LLVM_SYSPATH=$LLVM_PREBUILT MAX_JOBS=$JOBS \
 TRITON_WHEEL_VERSION_SUFFIX='$VSFX' \
 TRITON_BUILD_WITH_CCACHE=true TRITON_BUILD_WITH_CLANG_LLD=true TRITON_BUILD_PROTON=OFF \
 TRITON_APPEND_CMAKE_ARGS='-DTRITON_BUILD_UT=OFF'; $BISH python $ENTRY bdist_wheel"
