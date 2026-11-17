@@ -83,25 +83,31 @@ without knowing what is in it.
 * It does mean: when comparing **dev vs stable performance**, do not attribute every difference to triton-ascend or
   AscendNPU-IR source changes — part of it may be the toolchain generation.
 
-### ⚠️ stable wheels built 2026-11-11 … 2026-11-17 (before the fix): bundled toolchain was from 2026-11-09
+### ⚠️ stable wheels of 2026-11-10 … 2026-11-15: the bundled toolchain was frozen (reporting 2026-11-09)
 
-* **Symptom** — the `bishengir-compile` / `bishengir-opt` / `hivmc` inside those **stable** wheels reported
-  `2.0.0 (… 0c87c1745b9c 2026-11-09)` even though the bundled AscendNPU-IR source was already `1389120d`
-  (2026-11-16). The **dev** line was not affected (its version stamp tracked the source every day).
+* **Symptom (byte-level check)** — the `bishengir-compile` inside those stable wheels:
+
+  | Date | md5 of the bundled `bishengir-compile` | Size | Reported version |
+  |---|---|---|---|
+  | 2026-11-09 | `a5adef892525` | 207.87 MB | `0c87c174` (2026-11-09) |
+  | **2026-11-10 … 2026-11-15** (6 wheels) | **all `f03ca847199e`** | 207.87 MB | `0c87c174` (2026-11-09) |
+  | 2026-11-17 (fixed) | `96ece04f1e21` | 210.16 MB | `1389120d` (2026-11-17) |
+
+  The **dev** line changes every day (e.g. 11-14 `5ad6374ff2b3`, 11-15 `449c4a684c07`, 11-16 `46c1e12eb1d5`,
+  11-17 `74b27984791c`). So the triton-ascend part of those stable wheels *was* fresh; only the bundled
+  AscendNPU-IR toolchain was frozen at the 2026-11-10 link (about 2.3 MB smaller than dev's).
 * **Cause** — a toolchain-compatibility pin made the stable line build against an older CANN release that cannot
   compile the newer AscendNPU-IR code; the resulting link failure was "recovered" by collecting the previously
   built binaries from the install directory, and the build still logged success → the 2026-11-09 binaries were
   silently shipped again every day.
-* **Impact** — those stable wheels did **not** contain any AscendNPU-IR change made after 2026-11-10; the version
-  stamp printed by the bundled tools is the reliable indicator.
+* **Impact** — those stable wheels did **not** contain any AscendNPU-IR change made after 2026-11-10 (confirmed both by md5 and by the version stamp). The triton-ascend side of the wheel was up to date; only the AscendNPU-IR / bishengir layer was missing.
 * **Fixed 2026-11-17** — the pin was removed (both product lines now build against the same CANN release), the
   build directory was reconfigured from scratch (`build.sh` exited 0, no stubbed sources), and all three bundled
   tools now report `1389120d7732 2026-11-17`. The daily build also gained a **version self-check** that compares
   the bundled toolchain's reported commit with the source commit, fails loudly (and forces a reconfigure next
   run) on mismatch, and records the result in `BUILD_INFO.txt`. The 2026-11-17 stable asset was rebuilt and
   replaced.
-* **Recommendation** — use stable wheels built **after 2026-11-17 18:00**; treat the 11-11 … 11-17 stable wheels
-  as "AscendNPU-IR of 2026-11-09".
+* **Recommendation** — use stable wheels built **after 2026-11-17 18:00**; treat the stable wheels of 2026-11-10 … 2026-11-15 as "AscendNPU-IR of about 2026-11-09" (their triton-ascend part is unaffected).
 
 ### ℹ️ Since 2026-10-10 the wheel is ~39 MB larger (not a defect)
 
