@@ -83,7 +83,7 @@ without knowing what is in it.
 * It does mean: when comparing **dev vs stable performance**, do not attribute every difference to triton-ascend or
   AscendNPU-IR source changes — part of it may be the toolchain generation.
 
-### ⚠️ stable wheels of 2026-11-10 … 2026-11-15: the bundled toolchain was frozen (reporting 2026-11-09)
+### ✅ Fixed & re-published — stable wheels of 2026-11-10 … 2026-11-15 had a frozen bundled toolchain (reporting 2026-11-09)
 
 * **Symptom (byte-level check)** — the `bishengir-compile` inside those stable wheels:
 
@@ -107,7 +107,19 @@ without knowing what is in it.
   the bundled toolchain's reported commit with the source commit, fails loudly (and forces a reconfigure next
   run) on mismatch, and records the result in `BUILD_INFO.txt`. The 2026-11-17 stable asset was rebuilt and
   replaced.
-* **Recommendation** — use stable wheels built **after 2026-11-17 18:00**; treat the stable wheels of 2026-11-10 … 2026-11-15 as "AscendNPU-IR of about 2026-11-09" (their triton-ascend part is unaffected).
+* **Re-published 2026-11-17 21:48** — all six days were rebuilt from their own commit pair and the assets were
+  replaced (verified byte-for-byte against the published digests):
+
+  | Date | AscendNPU-IR reported by the rebuilt toolchain | new sha256 (first 12) |
+  |---|---|---|
+  | 2026-11-10 | `ec72093ae9f9` | `60fa72eb4499` |
+  | 2026-11-11 | `ec72093ae9f9` | `049a1a4ef627` |
+  | 2026-11-12 | `8dc16e1d5530` | `fac8f7028e83` |
+  | 2026-11-13 | `395c9c5646f9` | `9b67f03ee3b1` |
+  | 2026-11-14 | `0bfb79a16bee` | `de9c8b21eebf` |
+  | 2026-11-15 | `af999e735d8e` | `ccaac0c901f1` |
+
+  These wheels are now safe to use; if you only need the newest toolchain, prefer builds from 2026-11-17 onwards.
 
 ### ℹ️ Since 2026-10-10 the wheel is ~39 MB larger (not a defect)
 
