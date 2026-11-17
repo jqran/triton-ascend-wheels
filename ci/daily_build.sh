@@ -191,13 +191,12 @@ if [ -z "${LLVM_PREBUILT:-}" ]; then
   done
 fi
 LLVM_PREBUILT=${LLVM_PREBUILT:-$HOME/workspace/llvm}
-# stable 线的 AscendNPU-IR(stable 分支) 与 2026-11-04 版 CANN 不兼容：
-#   BishengLlcBridge.cpp 用到的 BISHENG_LLC_OK / _BAD_STATE / _AUX_ERROR / _IO_ERROR 在新 bisheng/ccec 头里已改，
-#   编 hivmc 时直接报 undeclared identifier（dev 的 NPUIR 11-09 已适配，无此问题）。
-# 因此 stable 默认钉到旧 CANN（2026-09-22 装的 cann-9.3.0）；等上游 stable 分支跟进后可删掉这段。
-if [ "${VARIANT:-}" = "stable" ] && [ -z "${CANN_ROOT:-}" ] && [ -d "$HOME/Ascend/cann-9.3.0" ]; then
-  CANN_ROOT=$HOME/Ascend/cann-9.3.0
-fi
+# 【2026-11-17 已移除】stable 线原先钉旧 CANN（2026-09-22 的 cann-9.3.0），理由是 stable 分支的
+#   BishengLlcBridge.cpp 只认老枚举 BISHENG_LLC_OK/_BAD_STATE/_AUX_ERROR/_IO_ERROR。
+# 但 stable 已 merge !5146（sync1116，1389120d）：现在两个文件都只用**新**枚举
+#   （BishengLlcBridge.cpp 5 处、A5/HIVMCMainA5.cpp 2 处 都是 BISHENG_LLC_VF_STACK_OVERFLOW 等），
+#   而旧 CANN **连 bisheng-llc.h 都没有** → 钉旧 CANN 反而编不过（hivmc 链接失败）。
+# 所以两条线统一用 ~/Ascend/cann（当前 -> Ascend-20261104/cann-9.3.0）。若将来 stable 又出现老枚举依赖，再加回。
 CANN_ROOT=${CANN_ROOT:-$(readlink -f "$HOME/Ascend/cann")}   # 安装器维护的软链；2026-11-09 起 -> Ascend-20261104/cann-9.3.0
 CANN_ENV=${CANN_ENV:-$CANN_ROOT/set_env.sh}
 CANN_BISHENG=${CANN_BISHENG:-$CANN_ROOT/tools/bisheng_compiler/bin}
@@ -517,6 +516,14 @@ if [ "${NP_SYNC:-0}" -eq 1 ]; then
     rm -f "$NP_BUILD/CMakeCache.txt"
   fi
   echo "$CANN_BISHENG" > "$CANN_MARK"
+  # 源码 commit 变了也必须重配：cmake 只在 configure 时把 AscendNPU-IR 版本号写进生成头，
+  # 不重配就会出现"源码已到 11-16、包内 bishengir 仍自报 11-09"的静默漂移（2026-11-17 发现）
+  NP_COMMIT_MARK=$NP_BUILD/.ws_daily_npuir_commit
+  CUR_NP_FULL=$(git -C "$NP_REPO" rev-parse HEAD 2>/dev/null)
+  if [ -f "$NP_BUILD/CMakeCache.txt" ] && [ -f "$NP_COMMIT_MARK" ] && [ "$(cat "$NP_COMMIT_MARK" 2>/dev/null)" != "$CUR_NP_FULL" ]; then
+    log "[NPUIR] 源码 commit 变化（$(cut -c1-8 "$NP_COMMIT_MARK" 2>/dev/null) → ${CUR_NP_FULL:0:8}）→ 删 CMakeCache 强制重配（否则版本号不更新）"
+    rm -f "$NP_BUILD/CMakeCache.txt"
+  fi
   NP_CMD="export PATH=$PY311:$HOME/.local/bin:\$PATH; source $CANN_ENV >/dev/null 2>&1; cd $NP_REPO && ./build-tools/build.sh \
 --c-compiler $LLVM_PREBUILT/bin/clang --cxx-compiler $LLVM_PREBUILT/bin/clang++ \
 '--add-cmake-options=-DLLVM_ENABLE_LLD=ON' --build-type Release -j $JOBS --enable-assertion \
@@ -580,6 +587,23 @@ if [ "${NP_SYNC:-0}" -eq 1 ]; then
     fi
   fi
   [ $NPUIR_OK -eq 1 ] && log "[NPUIR] ✅ 产物齐全：$("$NP_BUILD/bin/bishengir-opt" --version 2>&1 | head -1)"
+
+  # 版本自检：包内 bishengir 自报的 commit 必须等于当前源码 HEAD。
+  # 不等 = cmake 的生成头没更新（configure 没跑），会静默把旧版本号打进包（2026-11-17 在 stable 线上发现：
+  # 源码已是 1389120d，包内仍报 0c87c174（11-09），连续 6 个 stable 包都这样）。
+  BISH_VER_MISMATCH=""
+  if [ $NPUIR_OK -eq 1 ]; then
+    BISH_VER_LINE=$("$NP_BUILD/bin/bishengir-opt" --version 2>&1 | head -1)
+    if printf '%s' "$BISH_VER_LINE" | grep -q "${CUR_NP_FULL:0:8}"; then
+      log "[NPUIR] 版本自检 ✅ 包内 bishengir 自报 commit = 源码 HEAD ${CUR_NP_FULL:0:8}"
+      echo "$CUR_NP_FULL" > "$NP_COMMIT_MARK"
+    else
+      BISH_VER_MISMATCH="包内 bishengir 版本不含源码 HEAD ${CUR_NP_FULL:0:8}（$BISH_VER_LINE）"
+      log "[NPUIR] ⚠️ 版本自检失败：$BISH_VER_MISMATCH"
+      log "[NPUIR]    → 已删 CMakeCache，下次运行强制重配；本轮包内版本号偏旧"
+      rm -f "$NP_BUILD/CMakeCache.txt" "$NP_COMMIT_MARK"
+    fi
+  fi
 else
   log "[NPUIR] ❌ 源码同步失败，跳过构建"
   NPUIR_OK=0
@@ -687,6 +711,7 @@ PY
     echo "模板库缺失: ${MISSING_BC:-无}"
     echo "模板库条目: $(ls "$PAYLOAD/lib"/*.bc 2>/dev/null | wc -l) 个 .bc"
     echo "产物新鲜度: ${STALE_WARN:-全新（ninja 无待办）}"
+    [ -n "${BISH_VER_MISMATCH:-}" ] && echo "⚠️ bishengir 版本自检失败: $BISH_VER_MISMATCH"
     echo "payload: $([ $NPUIR_OK -eq 1 ] && echo "bishengir-payload-npuir${NP8}.tar.gz ($(du -sh "$PAYLOAD" | cut -f1))" || echo "无")"
     echo "容器: $CONTAINER (Ubuntu 20.04/glibc 2.31)  jobs=$JOBS  log=$LOG"
     echo "cann: $CANN_ROOT ($("$CANN_BISHENG/ccec" --version 2>/dev/null | grep -oE 'clang version [0-9.]+' | head -1))"
