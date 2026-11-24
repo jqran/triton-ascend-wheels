@@ -631,10 +631,16 @@ if [ $NPUIR_OK -eq 1 ]; then
     cp -f "$f" "$PAYLOAD/lib/" 2>/dev/null
   done
   chmod 755 "$PAYLOAD"/bin/*
-  EXPECT_BC="host.bc meta_op.aic.c220.bc meta_op.aic.c310.bc meta_op.aiv.c220.bc meta_op.aiv.c310.bc meta_op.mix.aic.c220.bc meta_op.mix.aic.c310.bc meta_op.mix.aiv.c220.bc meta_op.mix.aiv.c310.bc"
-  for b in $EXPECT_BC; do [ -f "$PAYLOAD/lib/$b" ] || MISSING_BC="$MISSING_BC $b"; done
+  # 2026-10-10 起上游模板库按优化级别生成（host.O0/O2.bc …），无后缀的基名已不再产出；
+  # 判定改成"每个基名至少有 O0 或 O2 变体"（bishengir-compile 运行期总是拼 .<opt>.bc 查找）
+  EXPECT_BC="host meta_op.aic.c220 meta_op.aic.c310 meta_op.aiv.c220 meta_op.aiv.c310 meta_op.mix.aic.c220 meta_op.mix.aic.c310 meta_op.mix.aiv.c220 meta_op.mix.aiv.c310"
+  for b in $EXPECT_BC; do
+    if [ ! -f "$PAYLOAD/lib/$b.bc" ] && [ ! -f "$PAYLOAD/lib/$b.O0.bc" ] && [ ! -f "$PAYLOAD/lib/$b.O2.bc" ]; then
+      MISSING_BC="$MISSING_BC $b.bc"
+    fi
+  done
   log "[payload] bin=$(ls "$PAYLOAD/bin" | tr '\n' ' ') | lib=$(ls "$PAYLOAD/lib"/*.bc | wc -l) 个 .bc | 体积=$(du -sh "$PAYLOAD" | cut -f1)"
-  [ -n "$MISSING_BC" ] && log "[payload] ⚠️ 缺模板库:$MISSING_BC（已记入 BUILD_INFO）" || log "[payload] ✅ 模板库 9 个齐全"
+  [ -n "$MISSING_BC" ] && log "[payload] ⚠️ 缺模板库:$MISSING_BC（已记入 BUILD_INFO）" || log "[payload] ✅ 模板库齐全（每个基名均有 O0/O2 变体）"
 else
   log "[payload] 跳过（NPUIR 构建失败，将只出不含 bishengir 的 TA wheel）"
 fi
