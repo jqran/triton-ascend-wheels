@@ -147,7 +147,7 @@ for i in "${ORDER[@]}"; do
   NP_BR=$(sed -n 's/^AscendNPU-IR:  branch=\([^ ]*\).*/\1/p' "$INFO" | head -1)
   STUBBED=$(get '空 TU 顶替的模板源文件'); [ "$STUBBED" = "无" ] && STUBBED=""
   MISSING_BC=$(get '模板库缺失');          [ "$MISSING_BC" = "无" ] && MISSING_BC=""
-  CANN=$(get cann)
+  CANN=$(get cann | sed -E 's#^[^ ]*/##')   # 对外脱敏：只留 cann-<版本>，去掉构建机绝对路径
   CONTAINER=$(get 容器 | sed 's/  *log=.*//')
   BC_CNT=$(get 模板库条目)
   NPUIR_OK=1
