@@ -101,6 +101,9 @@ Some days have no release at all (build machine offline, transient failures) and
 the two product lines; a few older wheels also carry known defects. All of it is documented per date in
 **[RELEASE_LOG.md](RELEASE_LOG.md)** — please check it before using an older wheel.
 
+How the combined wheel is built and packaged (Chinese, with source excerpts and a self-check list):
+[docs/wheel-packaging.zh-CN.md](docs/wheel-packaging.zh-CN.md).
+
 ## Build scripts
 
 The wheels in this repository are produced by the scripts in `ci/`, which you can reuse directly:
